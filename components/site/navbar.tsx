@@ -59,7 +59,7 @@ export function Navbar() {
         style={{ scaleX }}
         className="absolute inset-x-0 top-0 h-[3px] origin-left bg-moss"
       />
-      <nav className="mx-auto grid max-w-7xl grid-cols-[1fr_auto_1fr] items-center px-5 py-3.5">
+      <nav className="mx-auto grid w-full max-w-[1920px] grid-cols-[auto_1fr_auto] items-center px-4 py-3 sm:px-6 md:px-8 lg:px-12 xl:px-16 2xl:px-20">
         <a
           href="#top"
           aria-label="Peaque — back to top"
@@ -70,7 +70,7 @@ export function Navbar() {
             height="21"
             viewBox="0 0 82 21"
             fill="none"
-            className="h-6 w-auto"
+            className="h-5 w-auto sm:h-6 lg:h-6.5 2xl:h-7"
           >
             <path
               d="M23.7912 12.9207C23.4167 12.9207 23.1268 12.818 22.9214 12.6126C22.7281 12.3952 22.6314 12.0992 22.6314 11.7247V1.1779C22.6314 0.79131 22.7341 0.501365 22.9395 0.308068C23.1449 0.102689 23.4348 1.37832e-07 23.8094 1.37832e-07H28.1767C29.5781 1.37832e-07 30.6593 0.350351 31.4204 1.05105C32.1815 1.75176 32.5621 2.73032 32.5621 3.98676C32.5621 5.24319 32.1815 6.22779 31.4204 6.94058C30.6593 7.64128 29.5781 7.99163 28.1767 7.99163H24.951V11.7247C24.951 12.0992 24.8544 12.3952 24.6611 12.6126C24.4678 12.818 24.1778 12.9207 23.7912 12.9207ZM24.951 6.16135H27.8142C28.6357 6.16135 29.2579 5.98013 29.6808 5.6177C30.1036 5.24319 30.315 4.69954 30.315 3.98676C30.315 3.27397 30.1036 2.73636 29.6808 2.37393C29.2579 2.0115 28.6357 1.83028 27.8142 1.83028H24.951V6.16135Z"
@@ -91,7 +91,7 @@ export function Navbar() {
           </svg>
         </a>
 
-        <div className="col-start-2 hidden items-center gap-7 md:flex">
+        <div className="col-start-2 hidden items-center justify-center gap-6 lg:flex lg:gap-8 2xl:gap-10">
           {links.map((l) => (
             <NavLink key={l.href} {...l} />
           ))}
@@ -100,25 +100,25 @@ export function Navbar() {
         <div className="col-start-3 flex items-center justify-self-end">
           <a
             href="#contact"
-            className="hidden rounded-full border-2 border-ink px-5 py-2 text-sm font-semibold text-ink transition-colors hover:bg-ink hover:text-cream md:inline-block"
+            className="hidden rounded-full border-2 border-ink px-4 py-1.5 text-sm font-semibold text-ink transition-colors hover:bg-ink hover:text-cream lg:inline-block lg:px-5 lg:py-2 2xl:px-6 2xl:py-2.5 2xl:text-base"
           >
             Contact Us
           </a>
 
           <button
             type="button"
-            className="text-ink md:hidden"
+            className="text-ink lg:hidden"
             aria-expanded={open}
             aria-label={open ? "Close menu" : "Open menu"}
             onClick={() => setOpen((v) => !v)}
           >
-            {open ? <X size={26} /> : <Menu size={26} />}
+            {open ? <X size={24} className="sm:size-6.5" /> : <Menu size={24} className="sm:size-6.5" />}
           </button>
         </div>
       </nav>
 
       {open && (
-        <div className="flex flex-col gap-1 border-t border-ink/10 bg-cream px-6 pb-5 pt-2 md:hidden">
+        <div className="flex flex-col gap-1 border-t border-ink/10 bg-cream px-6 pb-5 pt-2 lg:hidden">
           {links.map((l) => (
             <NavLink key={l.href} {...l} onClick={() => setOpen(false)} />
           ))}

@@ -181,12 +181,15 @@
   .draw-hover path {
     stroke-dasharray: 320;
     stroke-dashoffset: 320;
-    transition: stroke-dashoffset 1.5s ease;
+    opacity: 0;
+    transition: stroke-dashoffset 0.1s ease-out, opacity 0.1s ease-out;
   }
 
   .group:hover .draw-hover path,
   .group:focus-visible .draw-hover path {
     stroke-dashoffset: 0;
+    opacity: 1;
+    transition: stroke-dashoffset 0.5s ease-in, opacity 0.15s ease-in;
   }
 }
 

@@ -50,26 +50,104 @@ function stadiumBoundaryPoint(angle: number, a: number, b: number, gap: number =
   };
 }
 
+// `Math.atan2` wraps its result into (-π, π], and that range's discontinuity sits
+// on the negative x-axis — directly left of the tag. Crossing it flips the raw value
+// by ~2π, which a CSS `rotate()` transition renders as a full 360° spin even though
+// the real direction barely moved. Returning the equivalent angle nearest `current`
+// keeps the fed value continuous, so the transition always takes the short way round.
+function nearestEquivalentAngle(target: number, current: number) {
+  const delta = target - current;
+  return current + Math.atan2(Math.sin(delta), Math.cos(delta));
+}
+
 export function Hero() {
   const scope = useRef<HTMLElement>(null);
   const introRef = useRef<gsap.core.Timeline | null>(null);
   const [revealed, setRevealed] = useState(false);
-  const [badgesHovered, setBadgesHovered] = useState(false);
+  const revealedRef = useRef(false);
+  const [hoveredBadge, setHoveredBadge] = useState<"instagram" | "linkedin" | null>(null);
   const [ctaHovered, setCtaHovered] = useState(false);
   const DESIGN_WEIGHT_MIN = 200;
   const DESIGN_WEIGHT_MAX = 750;
   const [designWeight, setDesignWeight] = useState(400);
   const designTrackRef = useRef<HTMLSpanElement>(null);
   const abhayRef = useRef<HTMLSpanElement>(null);
-  const ABHAY_ARROW_GAP = 10;
+  const designWordRef = useRef<HTMLSpanElement>(null);
+  const [isDesignClicked, setIsDesignClicked] = useState(false);
+  const [designPulsing, setDesignPulsing] = useState(false);
+  const ABHAY_ARROW_GAP = 24;
   const ABHAY_REACT_RADIUS = 160;
-  const [abhayMounted, setAbhayMounted] = useState(false);
-  const [abhayAngle, setAbhayAngle] = useState(-2.35);
+  const DEFAULT_ABHAY_ANGLE = -2.7;
+  const [abhayAngle, setAbhayAngle] = useState(DEFAULT_ABHAY_ANGLE);
   const [abhayHalfSize, setAbhayHalfSize] = useState({ w: 42, h: 19 });
+  const [isAbhayTracking, setIsAbhayTracking] = useState(false);
+
+  const ctaArrowRef = useRef<HTMLAnchorElement>(null);
+  const underlineRef = useRef<HTMLImageElement>(null);
+  const socialsTagRef = useRef<HTMLSpanElement>(null);
+  const socialsArrowPathRef = useRef<SVGPathElement>(null);
+  const socialsArrowHeadRef = useRef<SVGPathElement>(null);
+  const asideTagRef = useRef<HTMLDivElement>(null);
+  const asideScribblePathRef = useRef<SVGPathElement>(null);
+
+  const abhayAngleRef = useRef(DEFAULT_ABHAY_ANGLE);
+  const animFrameRef = useRef<number | null>(null);
+
+  const startReturnToDefaultAnimation = useCallback(
+    (customDuration?: number) => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+
+      const startAngle = abhayAngleRef.current;
+      // Tracking leaves `startAngle` unwrapped (it accumulates across revolutions),
+      // so resolve the resting angle into whichever revolution the arrow is in now.
+      // Snapping to the bare constant instead would itself be a 2π jump — i.e. a spin.
+      const endAngle = nearestEquivalentAngle(DEFAULT_ABHAY_ANGLE, startAngle);
+      const diff = endAngle - startAngle;
+
+      if (Math.abs(diff) < 0.01) {
+        setAbhayAngle(endAngle);
+        abhayAngleRef.current = endAngle;
+        return;
+      }
+
+      const duration = customDuration ?? 1200; // ms — slow, graceful return
+      const startTime = performance.now();
+
+      const animateStep = (now: number) => {
+        const elapsed = now - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        // Smooth ease-in-out cubic easing
+        const easeProgress =
+          progress < 0.5
+            ? 4 * progress * progress * progress
+            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+        const currentAngle = startAngle + diff * easeProgress;
+
+        abhayAngleRef.current = currentAngle;
+        setAbhayAngle(currentAngle);
+
+        if (progress < 1) {
+          animFrameRef.current = requestAnimationFrame(animateStep);
+        } else {
+          abhayAngleRef.current = endAngle;
+          setAbhayAngle(endAngle);
+          animFrameRef.current = null;
+        }
+      };
+
+      animFrameRef.current = requestAnimationFrame(animateStep);
+    },
+    [DEFAULT_ABHAY_ANGLE],
+  );
 
   useEffect(() => {
-    setAbhayMounted(true);
+    // "Abhay" tag is only rendered (lg:block) on large screens — skip the
+    // cursor-tracking work entirely below that breakpoint.
+    const mq = window.matchMedia("(min-width: 1024px)");
+    let active = mq.matches;
     const handleMouseMove = (e: MouseEvent) => {
+      if (!active) return;
       const el = abhayRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
@@ -77,19 +155,45 @@ export function Hero() {
       const cy = rect.top + rect.height / 2;
       const dx = e.clientX - cx;
       const dy = e.clientY - cy;
-      if (Math.hypot(dx, dy) > ABHAY_REACT_RADIUS) return;
-      setAbhayAngle(Math.atan2(dy, dx));
+      if (Math.hypot(dx, dy) > ABHAY_REACT_RADIUS) {
+        setIsAbhayTracking((wasTracking) => {
+          if (wasTracking) {
+            startReturnToDefaultAnimation();
+          }
+          return false;
+        });
+        return;
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      const targetAngle = nearestEquivalentAngle(
+        Math.atan2(dy, dx),
+        abhayAngleRef.current,
+      );
+      abhayAngleRef.current = targetAngle;
+      setAbhayAngle(targetAngle);
       setAbhayHalfSize({ w: rect.width / 2, h: rect.height / 2 });
+      setIsAbhayTracking(true);
     };
+    const handleChange = (e: MediaQueryListEvent) => {
+      active = e.matches;
+    };
+    mq.addEventListener("change", handleChange);
     window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, []);
+    return () => {
+      mq.removeEventListener("change", handleChange);
+      window.removeEventListener("mousemove", handleMouseMove);
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, [ABHAY_REACT_RADIUS, DEFAULT_ABHAY_ANGLE, startReturnToDefaultAnimation]);
 
   const abhayBoundary = stadiumBoundaryPoint(
     abhayAngle,
     abhayHalfSize.w,
     abhayHalfSize.h,
-    14 // uniform distance gap on all sides
+    ABHAY_ARROW_GAP
   );
   const abhayArrowX = abhayBoundary.x;
   const abhayArrowY = abhayBoundary.y;
@@ -109,37 +213,154 @@ export function Hero() {
 
   useEffect(() => {
     const ctx = gsap.context(() => {
-      gsap.set("[data-word]", { yPercent: 115 });
-      gsap.set("[data-hero-fade]", { autoAlpha: 0, y: 24 });
+      const mm = gsap.matchMedia();
 
-      // paused until the loader lifts
-      const tl = gsap.timeline({
-        paused: true,
-        defaults: { ease: "power4.out" },
-      });
-      tl.to(
-        "[data-word]",
-        { yPercent: 0, duration: 1.1, stagger: 0.06 },
-        0.1,
-      ).to(
-        "[data-hero-fade]",
-        { autoAlpha: 1, y: 0, duration: 0.8, stagger: 0.12 },
-        "-=0.4",
-      );
-      introRef.current = tl;
-
-      // gentle parallax out as you scroll away
-      gsap.to("[data-hero-inner]", {
-        yPercent: -12,
-        autoAlpha: 0.25,
-        ease: "none",
-        scrollTrigger: {
-          trigger: scope.current,
-          start: "top top",
-          end: "bottom top",
-          scrub: true,
+      mm.add(
+        {
+          isMobile: "(max-width: 639px)",
+          isTablet: "(min-width: 640px) and (max-width: 1023px)",
+          isDesktop: "(min-width: 1024px)",
         },
-      });
+        (context) => {
+          const { isMobile } = context.conditions as {
+            isMobile: boolean;
+            isTablet: boolean;
+          };
+
+          const fadeY = isMobile ? 14 : 24;
+          const fadeDuration = isMobile ? 0.6 : 0.8;
+          const fadeStagger = isMobile ? 0.08 : 0.12;
+          const parallaxDistance = isMobile ? -6 : -12;
+
+          const preparePath = (pathEl: SVGPathElement | null) => {
+            if (!pathEl) return 0;
+            const length = pathEl.getTotalLength();
+            gsap.set(pathEl, {
+              strokeDasharray: length,
+              strokeDashoffset: length,
+              autoAlpha: 1,
+            });
+            return length;
+          };
+
+          const wordEls = gsap.utils.toArray<HTMLElement>("[data-word]");
+
+          // Initial hidden state setup
+          gsap.set(wordEls, { autoAlpha: 0, y: 16 });
+          if (ctaArrowRef.current) {
+            gsap.set(ctaArrowRef.current, { autoAlpha: 0, scale: 0.4 });
+          }
+          if (underlineRef.current) {
+            gsap.set(underlineRef.current, { scaleX: 0, autoAlpha: 1, transformOrigin: "left center" });
+          }
+          if (socialsTagRef.current) {
+            gsap.set(socialsTagRef.current, { autoAlpha: 0, y: 10 });
+          }
+          preparePath(socialsArrowPathRef.current);
+          preparePath(socialsArrowHeadRef.current);
+
+          if (asideTagRef.current) {
+            gsap.set(asideTagRef.current, { autoAlpha: 0, y: 10 });
+          }
+          preparePath(asideScribblePathRef.current);
+          gsap.set("[data-hero-fade]", { autoAlpha: 0, y: fadeY });
+
+          // Paused until the loader lifts
+          const tl = gsap.timeline({
+            paused: true,
+            defaults: { ease: "power3.out" },
+          });
+
+          // FIRST: Center big text word by word from top to bottom
+          wordEls.forEach((el, index) => {
+            tl.to(el, { autoAlpha: 1, y: 0, duration: 0.4 }, index === 0 ? 0.15 : "-=0.28");
+
+            // Right arrow appears seamlessly alongside "Motion" at word index 2
+            if (index === 2 && ctaArrowRef.current) {
+              tl.to(
+                ctaArrowRef.current,
+                { autoAlpha: 1, scale: 1, duration: 0.45, ease: "back.out(1.7)" },
+                "<",
+              );
+            }
+          });
+
+          // When "Founders." is loaded, its bottom line animates from start to end (left to right)
+          if (underlineRef.current) {
+            tl.to(
+              underlineRef.current,
+              { scaleX: 1, duration: 0.65, ease: "power2.out" },
+              "+=0.05",
+            );
+          }
+
+          // SECONDLY: 'For socials, Apps, websites & Products' is loaded and after it below arrow is animated rendering from start to end
+          if (socialsTagRef.current) {
+            tl.to(
+              socialsTagRef.current,
+              { autoAlpha: 1, y: 0, duration: 0.45, ease: "power2.out" },
+              "+=0.15",
+            );
+          }
+          if (socialsArrowPathRef.current) {
+            tl.to(
+              socialsArrowPathRef.current,
+              { strokeDashoffset: 0, duration: 0.55, ease: "power2.inOut" },
+              "-=0.15",
+            );
+          }
+          if (socialsArrowHeadRef.current) {
+            tl.to(
+              socialsArrowHeadRef.current,
+              { strokeDashoffset: 0, duration: 0.25, ease: "power2.out" },
+              "-=0.1",
+            );
+          }
+
+          // THIRDLY: "We give every project..." is loaded and after it below SVG is animated rendering from start to end
+          if (asideTagRef.current) {
+            tl.to(
+              asideTagRef.current,
+              { autoAlpha: 1, y: 0, duration: 0.45, ease: "power2.out" },
+              "+=0.15",
+            );
+          }
+          if (asideScribblePathRef.current) {
+            tl.to(
+              asideScribblePathRef.current,
+              { strokeDashoffset: 0, duration: 0.75, ease: "power1.inOut" },
+              "-=0.15",
+            );
+          }
+
+          // Finally reveal remaining elements (badges and scroll cue)
+          tl.to(
+            "[data-hero-fade]",
+            { autoAlpha: 1, y: 0, duration: fadeDuration, stagger: fadeStagger },
+            "-=0.2",
+          );
+
+          introRef.current = tl;
+          if (revealedRef.current) tl.play();
+
+          // gentle parallax out as you scroll away
+          gsap.to("[data-hero-inner]", {
+            yPercent: parallaxDistance,
+            autoAlpha: 0.25,
+            ease: "none",
+            scrollTrigger: {
+              trigger: scope.current,
+              start: "top top",
+              end: "bottom top",
+              scrub: true,
+            },
+          });
+
+          return () => {
+            introRef.current = null;
+          };
+        },
+      );
     }, scope);
     return () => ctx.revert();
   }, []);
@@ -162,8 +383,145 @@ export function Hero() {
   }, []);
 
   useEffect(() => {
-    if (revealed) introRef.current?.play();
-  }, [revealed]);
+    revealedRef.current = revealed;
+    if (!revealed) return;
+    introRef.current?.play();
+
+    // Below lg the "Abhay" tag is hidden (see its `hidden lg:block` className),
+    // so skip measuring/animating it — the rects would be meaningless (0-sized).
+    if (!window.matchMedia("(min-width: 1024px)").matches) return;
+
+    const abhayEl = abhayRef.current;
+    const designEl = designWordRef.current;
+    const trackEl = designTrackRef.current;
+    if (!abhayEl || !designEl || !trackEl) return;
+
+    // Set arrow direction pointing left towards targets (Math.PI / 180deg)
+    setAbhayAngle(Math.PI);
+
+    // Start with minimum weight at slider bottom
+    setDesignWeight(DESIGN_WEIGHT_MIN);
+
+    // Measure exact bounding rectangles
+    const abhayRect = abhayEl.getBoundingClientRect();
+    const designRect = designEl.getBoundingClientRect();
+    const trackRect = trackEl.getBoundingClientRect();
+
+    const abhayHalfW = abhayRect.width / 2;
+    const abhayHalfH = abhayRect.height / 2;
+    const abhayCenterX = abhayRect.left + abhayHalfW;
+    const abhayCenterY = abhayRect.top + abhayHalfH;
+
+    // Calculate exact arrow tip offset when pointing left (Math.PI)
+    const arrowBoundary = stadiumBoundaryPoint(
+      Math.PI,
+      abhayHalfW,
+      abhayHalfH,
+      ABHAY_ARROW_GAP,
+    );
+
+    // SVG arrow tip extends ~18px left of arrow center when rotated 180deg (Math.PI)
+    const ARROW_TIP_LENGTH = 18;
+    const arrowTipX = arrowBoundary.x - ARROW_TIP_LENGTH;
+
+    // 1. Point arrow tip EXACTLY at the word "Design"
+    const designTargetPointX = designRect.right;
+    const designTargetPointY = designRect.top + designRect.height / 2;
+
+    const designTargetX = designTargetPointX - abhayCenterX - arrowTipX;
+    const designTargetY = designTargetPointY - abhayCenterY - arrowBoundary.y;
+
+    const startX = Math.max(400, window.innerWidth - abhayRect.left + 120);
+
+    // 2. Point arrow tip EXACTLY at the vertical slider controller knob
+    const trackCenterX = trackRect.left + trackRect.width / 2;
+    const sliderBottomPointY = trackRect.bottom - 4;
+
+    const sliderBottomX = trackCenterX - abhayCenterX - arrowTipX;
+    const sliderBottomY = sliderBottomPointY - abhayCenterY - arrowBoundary.y;
+
+    const DEFAULT_WEIGHT = 400;
+    const defaultRatio =
+      (DEFAULT_WEIGHT - DESIGN_WEIGHT_MIN) /
+      (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN);
+    const sliderDefaultPointY =
+      trackRect.bottom - defaultRatio * trackRect.height;
+    const sliderDefaultY =
+      sliderDefaultPointY - abhayCenterY - arrowBoundary.y;
+
+    const tl = gsap.timeline({ delay: 0.25 });
+
+    tl.set(abhayEl, { x: startX, y: 0, opacity: 0, scale: 1 })
+      .to(abhayEl, {
+        x: designTargetX,
+        y: designTargetY,
+        opacity: 1,
+        duration: 1.2,
+        ease: "power2.out",
+      })
+      .to(abhayEl, {
+        scale: 0.82,
+        duration: 0.12,
+        ease: "power1.in",
+        onComplete: () => {
+          setIsDesignClicked(true);
+          setDesignPulsing(true);
+          setTimeout(() => setDesignPulsing(false), 350);
+        },
+      })
+      .to(abhayEl, {
+        scale: 1,
+        duration: 0.14,
+        ease: "back.out(2)",
+      })
+      .to({}, { duration: 0.25 })
+      .to(abhayEl, {
+        x: sliderBottomX,
+        y: sliderBottomY,
+        duration: 0.7,
+        ease: "power2.inOut",
+      })
+      .to(abhayEl, {
+        scale: 0.88,
+        duration: 0.1,
+      })
+      .to(abhayEl, {
+        y: sliderDefaultY,
+        duration: 0.9,
+        ease: "power1.inOut",
+        onUpdate: function () {
+          const abhayCurrentY =
+            abhayRect.top + (gsap.getProperty(abhayEl, "y") as number);
+          const arrowTipY = abhayCurrentY + abhayHalfH + arrowBoundary.y;
+          const ratio = 1 - (arrowTipY - trackRect.top) / trackRect.height;
+          const clamped = Math.min(1, Math.max(0, ratio));
+          const weight = Math.round(
+            DESIGN_WEIGHT_MIN +
+              clamped * (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN),
+          );
+          setDesignWeight(weight);
+        },
+      })
+      .to(abhayEl, {
+        scale: 1,
+        duration: 0.15,
+        ease: "back.out(2)",
+      })
+      .to({}, { duration: 0.2 })
+      .to(abhayEl, {
+        x: 0,
+        y: 0,
+        duration: 0.85,
+        ease: "power3.out",
+        onComplete: () => {
+          startReturnToDefaultAnimation();
+        },
+      });
+
+    return () => {
+      tl.kill();
+    };
+  }, [revealed, startReturnToDefaultAnimation]);
 
   const [falling, setFalling] = useState(false);
 
@@ -305,11 +663,11 @@ export function Hero() {
         className="relative mx-auto flex w-full max-w-7xl flex-col items-center text-center px-5"
       >
         {/* "for socials, apps..." tag + curved arrow, pointing into the headline */}
-        <div
-          data-hero-fade
-          className="absolute top-3 left-12 hidden -rotate-9 md:block"
-        >
-          <span className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs font-medium text-[#4F6156]">
+        <div className="absolute top-3 left-12 hidden -rotate-9 lg:block">
+          <span
+            ref={socialsTagRef}
+            className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs font-medium text-[#4F6156]"
+          >
             For Socials, Apps, Websites &amp; Products
           </span>
 
@@ -320,13 +678,20 @@ export function Hero() {
             className="ml-24 mt-1 w-20 text-ink/60"
           >
             <path
+              ref={socialsArrowPathRef}
               d="M0.484375 0.125488C3.98438 13.6255 38.4844 39.6255 69.9844 39.6255"
               stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
             />
             <g transform="translate(54.624, 28.868)">
               <path
+                ref={socialsArrowHeadRef}
                 d="M2.87622 0.257233C4.37622 2.75723 9.87622 9.75723 13.3762 10.7572C14.8762 11.1858 3.87622 13.7572 0.376221 17.7572"
                 stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
               />
             </g>
           </svg>
@@ -334,7 +699,7 @@ export function Hero() {
 
         {/* hand-written aside, top right */}
         <div
-          data-hero-fade
+          ref={asideTagRef}
           className="absolute -top-10 right-16 hidden w-50 rotate-10 text-right lg:block"
         >
           <p className="font-hand text-xl leading-snug text-ink/90">
@@ -344,47 +709,46 @@ export function Hero() {
             viewBox="0 0 113 83"
             fill="none"
             aria-hidden
-            // filter="url(#pencil-stroke)"
-            className="-ml-3 -mt-5 w-36 -rotate-10"
+            className="-ml-3 -mt-5 w-36 -rotate-10 text-ink/60"
           >
             <path
+              ref={asideScribblePathRef}
               opacity="0.7"
               d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
               stroke="currentColor"
+              strokeWidth="1.8"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           </svg>
         </div>
 
-        <h1 className="mt-24 font-heading font-black leading-[1.13] tracking-normal [word-spacing:0.22em] text-ink md:mt-16">
-          <span className="block text-[clamp(3.5rem,3.9vw,5rem)]">
+        <h1 className="mt-24 font-heading font-black leading-[1.05] tracking-normal [word-spacing:0.22em] text-ink md:mt-16">
+          <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
             {words([
               { text: "Retention", className: "font-[750]" },
               { text: "Driven", className: "font-normal" },
             ])}
           </span>
 
-          <span className="relative block text-[clamp(3.5rem,3.9vw,5rem)]">
+          <span className="relative block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
             <span className="group/cta relative inline-flex items-center">
-              <span className="inline-block transition-transform duration-700 ease-in-out group-has-[a:hover]/cta:-translate-x-34">
+              <span className="inline-block transition-transform duration-700 ease-in-out group-has-[a:hover]/cta:-translate-x-[2.42em]">
                 {words([{ text: "Motion", className: "font-normal" }])}
               </span>
               <motion.a
+                ref={ctaArrowRef}
                 href="#contact"
                 data-fall-item
-                initial={{ opacity: 0, scale: 0.4 }}
-                animate={revealed ? { opacity: 1, scale: 1 } : {}}
-                transition={{ duration: 0.5, delay: 0.85, ease: "backOut" }}
-                className="group/arrow relative mx-2.5 inline-flex size-[0.88em] -translate-y-[0.05em] shrink-0 items-center justify-center align-middle"
+                className="group/arrow relative mr-[0.22em] inline-flex size-[0.88em] -translate-y-[0.05em] shrink-0 items-center justify-center align-middle"
               >
                 {/* expanding pill background + text — absolutely positioned so it never
                     affects the surrounding text flow (guarantees "& Design" never moves) */}
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-black/80 pr-[0.75em] transition-[width] duration-700 ease-in-out group-hover/arrow:w-[3.26em]"
+                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-black/80 pr-[0.74em] transition-[width] duration-700 ease-in-out group-hover/arrow:w-[3.3em]"
                 >
-                  <span className="mr-2 translate-x-3 whitespace-nowrap text-[0.4em] font-semibold text-cream opacity-0 transition-all duration-700 ease-in-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
+                  <span className="mr-1.5 translate-x-2 whitespace-nowrap text-[0.4em] font-semibold text-cream opacity-0 transition-all duration-700 ease-in-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
                     Book a call
                   </span>
                 </span>
@@ -413,9 +777,17 @@ export function Hero() {
             >
               <span className="inline-block overflow-hidden pb-[0.08em] -mb-[0.08em] align-top">
                 <span
+                  ref={designWordRef}
                   data-word
-                  className="inline-block will-change-transform"
-                  style={{ fontWeight: designWeight }}
+                  className={`inline-block will-change-transform transition-all duration-300 ${
+                    designPulsing ? "scale-105" : ""
+                  }`}
+                  style={{
+                    fontWeight: designWeight,
+                    fontFamily: isDesignClicked
+                      ? "inherit"
+                      : "'Ink Free', var(--font-hand), var(--font-kalam), cursive",
+                  }}
                 >
                   Design
                 </span>
@@ -424,7 +796,9 @@ export function Hero() {
               {/* dotted selection border */}
               <span
                 aria-hidden
-                className="pointer-events-none absolute -inset-1 border border-dashed border-ink/50"
+                className={`pointer-events-none absolute -inset-1 border border-dashed border-ink/50 transition-opacity duration-300 ${
+                  isDesignClicked ? "opacity-100" : "opacity-0"
+                }`}
               />
 
               {/* 4 corner dots marking the selection — centered exactly on the dashed box's corners */}
@@ -437,7 +811,9 @@ export function Hero() {
                 <span
                   key={pos}
                   aria-hidden
-                  className={`pointer-events-none absolute ${pos} size-1.5 rounded-full bg-black`}
+                  className={`pointer-events-none absolute ${pos} size-1.5 rounded-full bg-black transition-opacity duration-300 ${
+                    isDesignClicked ? "opacity-100" : "opacity-0"
+                  }`}
                 />
               ))}
 
@@ -445,13 +821,19 @@ export function Hero() {
               <span
                 ref={designTrackRef}
                 onPointerDown={(e) => {
+                  if (!isDesignClicked) return;
                   e.currentTarget.setPointerCapture(e.pointerId);
                   updateDesignWeightFromPointer(e.clientY);
                 }}
                 onPointerMove={(e) => {
+                  if (!isDesignClicked) return;
                   if (e.buttons === 1) updateDesignWeightFromPointer(e.clientY);
                 }}
-                className="pointer-events-auto absolute -right-9 -top-2 -bottom-2 flex w-4 cursor-pointer items-center justify-center"
+                className={`absolute -right-9 -top-2 -bottom-2 flex w-4 items-center justify-center transition-opacity duration-300 ${
+                  isDesignClicked
+                    ? "opacity-100 pointer-events-auto cursor-pointer"
+                    : "opacity-0 pointer-events-none"
+                }`}
               >
                 <span
                   aria-hidden
@@ -477,16 +859,16 @@ export function Hero() {
             <span
               ref={abhayRef}
               data-fall-item
-              className="absolute -right-32 top-1/2 hidden -translate-y-1/2 lg:block"
+              className="absolute -right-16 top-1/2 hidden -translate-y-1/2 lg:block opacity-0"
             >
               <span
                 aria-hidden
                 style={{
-                  transform: abhayMounted
-                    ? `translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`
-                    : "translate(-30px, -30px) rotate(0deg)",
+                  transform: `translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
                 }}
-                className="pointer-events-none absolute left-1/2 top-1/2 -ml-4 -mt-4 size-8 text-[#226800] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform duration-150 ease-out"
+                className={`pointer-events-none absolute left-1/2 top-1/2 -ml-6 -mt-6 size-11 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform ease-out ${
+                  isAbhayTracking ? "duration-150" : "duration-75"
+                }`}
               >
                 <svg
                   viewBox="0 0 44 40"
@@ -496,25 +878,20 @@ export function Hero() {
                     d="M40 20 L6 4 L14 20 L6 36 Z"
                     fill="currentColor"
                     stroke="#FFFFFF"
-                    strokeWidth="3"
+                    strokeWidth="4"
                     strokeLinejoin="round"
                     strokeLinecap="round"
                   />
                 </svg>
               </span>
 
-              <motion.span
-                initial={{ opacity: 0, y: 10, scale: 0.85 }}
-                animate={revealed ? { opacity: 1, y: 0, scale: 1 } : {}}
-                transition={{ duration: 0.5, delay: 1.05, ease: "backOut" }}
-                className="relative flex items-center rounded-full bg-[#226800] px-5 py-2 text-sm m-2 font-bold text-cream shadow-[0_10px_24px_-6px_rgba(38,49,28,0.5)]"
-              >
+              <span className="relative flex items-center rounded-full bg-[#1e7a00] px-4 py-1.5 text-base font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
                 Abhay
-              </motion.span>
+              </span>
             </span>
           </span>
 
-          <span className="block text-[clamp(3.5rem,3.9vw,5rem)]">
+          <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
             {words([
               { text: "for", className: "font-normal" },
               { text: "Results", className: "font-[750]" },
@@ -522,8 +899,6 @@ export function Hero() {
             <span
               data-fall-item
               className="relative mx-3.5 inline-block h-[0.95em] w-[1.5em] translate-y-[0.1em] align-middle"
-              onMouseEnter={() => setBadgesHovered(true)}
-              onMouseLeave={() => setBadgesHovered(false)}
             >
               {/* Instagram-style badge — left, tilted left, tucked behind */}
               <motion.span
@@ -535,7 +910,8 @@ export function Hero() {
                         opacity: 1,
                         scale: 1,
                         rotate: -12,
-                        y: badgesHovered ? -6 : 0,
+                        y: hoveredBadge === "instagram" ? -8 : hoveredBadge === "linkedin" ? 8 : 0,
+                        zIndex: hoveredBadge === "instagram" ? 30 : 10,
                       }
                     : {}
                 }
@@ -545,7 +921,9 @@ export function Hero() {
                   ease: "backOut",
                   y: { duration: 0.3, ease: "easeOut" },
                 }}
-                className="absolute left-0 top-[0.4em] z-10 flex size-[0.58em] translate-y-[-40%] items-center justify-center rounded-xs ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                onMouseEnter={() => setHoveredBadge("instagram")}
+                onMouseLeave={() => setHoveredBadge(null)}
+                className="absolute left-0 top-[0.4em] z-10 flex size-[0.58em] translate-y-[-40%] cursor-pointer items-center justify-center rounded-xs ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
                 style={{
                   background:
                     "linear-gradient(135deg, #f9ce34, #ee2a7b, #6228d7)",
@@ -563,7 +941,8 @@ export function Hero() {
                         opacity: 1,
                         scale: 1,
                         rotate: 12,
-                        y: badgesHovered ? 6 : 0,
+                        y: hoveredBadge === "linkedin" ? -8 : hoveredBadge === "instagram" ? 8 : 0,
+                        zIndex: hoveredBadge === "linkedin" ? 30 : 20,
                       }
                     : {}
                 }
@@ -573,7 +952,9 @@ export function Hero() {
                   ease: "backOut",
                   y: { duration: 0.3, ease: "easeOut" },
                 }}
-                className="absolute right-[0.25em] top-1/2 z-20 flex size-[0.58em] translate-y-[-50%] items-center justify-center rounded-xs bg-[#0a66c2] ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                onMouseEnter={() => setHoveredBadge("linkedin")}
+                onMouseLeave={() => setHoveredBadge(null)}
+                className="absolute right-[0.25em] top-1/2 z-20 flex size-[0.58em] translate-y-[-50%] cursor-pointer items-center justify-center rounded-xs bg-[#0a66c2] ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
               >
                 <FaLinkedinIn className="size-[0.46em] text-white" />
               </motion.span>
@@ -582,44 +963,43 @@ export function Hero() {
           </span>
 
           <span className="relative ml-[0.02em] inline-block overflow-visible align-top">
-            <span className="block text-[clamp(3.5rem,3.9vw,5rem)]">
+            <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
               {words([
                 { text: "Founders", className: "italic font-semibold" },
                 { text: ".", className: "text-coral" },
               ])}
             </span>
             <motion.img
+              ref={underlineRef}
               src="/underline.svg"
               alt=""
               aria-hidden
               data-fall-item
-              initial={{ opacity: 0 }}
-              animate={revealed ? { opacity: 1 } : {}}
-              transition={{ duration: 0.6, delay: 1.3, ease: "easeOut" }}
-              className="absolute -bottom-3 left-[-2%] w-[104%]"
+              className="absolute -bottom-3 left-[-2%] w-[104%] origin-left"
             />
           </span>
         </h1>
-
-        {/* scroll cue, bottom right — aligned directly under the navbar contact button */}
-        <button
-          type="button"
-          aria-label="Scroll to explore"
-          data-hero-fade
-          onClick={handleFallAway}
-          className="absolute -bottom-24 right-5 flex size-14 items-center justify-center rounded-full border border-dashed border-ink/90 text-ink/90 transition-colors hover:border-ink hover:text-white hover:border-white hover:bg-ink/90"
-        >
-          <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-            <path
-              d="M12 5v14M12 19l-6-6M12 19l6-6"
-              stroke="currentColor"
-              strokeWidth={2}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
       </div>
+
+      {/* scroll cue, bottom right — aligned directly under the navbar contact button */}
+      <button
+        type="button"
+        aria-label="Scroll to explore"
+        data-hero-fade
+        onClick={handleFallAway}
+        className="absolute bottom-6 right-4 z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:right-6 sm:size-14 md:bottom-10 md:right-8 lg:bottom-10 lg:right-12 lg:size-16 xl:right-16 2xl:right-20"
+      >
+        <svg width="21" height="24" viewBox="0 0 21 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path
+            d="M10.5 1V11.75V22.5M20 14L10.5 22.5L1 14"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+
+      </button>
     </section>
   );
 }

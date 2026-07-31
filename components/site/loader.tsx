@@ -44,10 +44,15 @@ export function Loader() {
       panelRef.current,
       {
         yPercent: -100,
-        duration: 0.9,
+        duration: 0.85,
         ease: "power4.inOut",
-        onStart: reveal,
-        onComplete: () => setGone(true),
+        onStart: () => {
+          document.documentElement.style.overflow = "";
+        },
+        onComplete: () => {
+          reveal();
+          setGone(true);
+        },
       },
       "-=0.05"
     );
