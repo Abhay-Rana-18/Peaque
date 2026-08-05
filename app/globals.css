@@ -179,17 +179,17 @@
 
   /* squiggle that draws itself when a parent .group is hovered */
   .draw-hover path {
-    stroke-dasharray: 320;
-    stroke-dashoffset: 320;
+    stroke-dasharray: 120;
+    stroke-dashoffset: 120;
     opacity: 0;
-    transition: stroke-dashoffset 0.1s ease-out, opacity 0.1s ease-out;
+    transition: stroke-dashoffset 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease-out;
   }
 
   .group:hover .draw-hover path,
   .group:focus-visible .draw-hover path {
     stroke-dashoffset: 0;
     opacity: 1;
-    transition: stroke-dashoffset 0.5s ease-in, opacity 0.15s ease-in;
+    transition: stroke-dashoffset 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.15s ease-in;
   }
 }
 

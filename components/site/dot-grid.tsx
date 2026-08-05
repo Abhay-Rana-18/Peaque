@@ -109,12 +109,15 @@ export function DotGrid({
     const ctx = canvas.getContext("2d");
     if (ctx) ctx.scale(dpr, dpr);
 
-    const cols = Math.floor((width + gap) / (dotSize + gap));
-    const rows = Math.floor((height + gap) / (dotSize + gap));
-    const cell = dotSize + gap;
+    // Scale gap gradually as container width increases to keep grid clean & prevent overcrowding
+    const effectiveGap = width > 768 ? gap + (width - 768) * 0.015 : gap;
 
-    const gridW = cell * cols - gap;
-    const gridH = cell * rows - gap;
+    const cols = Math.floor((width + effectiveGap) / (dotSize + effectiveGap));
+    const rows = Math.floor((height + effectiveGap) / (dotSize + effectiveGap));
+    const cell = dotSize + effectiveGap;
+
+    const gridW = cell * cols - effectiveGap;
+    const gridH = cell * rows - effectiveGap;
 
     const startX = (width - gridW) / 2 + dotSize / 2;
     const startY = (height - gridH) / 2 + dotSize / 2;

@@ -10,7 +10,12 @@ type Token = { text: string; className?: string };
 
 // Point on a stadium / rounded-pill shape outline of half-width `a` and half-height `b`
 // at direction `angle` from center, offset by an exact uniform distance `gap`.
-function stadiumBoundaryPoint(angle: number, a: number, b: number, gap: number = 10) {
+function stadiumBoundaryPoint(
+  angle: number,
+  a: number,
+  b: number,
+  gap: number = 10,
+) {
   const dx = Math.cos(angle);
   const dy = Math.sin(angle);
 
@@ -65,7 +70,9 @@ export function Hero() {
   const introRef = useRef<gsap.core.Timeline | null>(null);
   const [revealed, setRevealed] = useState(false);
   const revealedRef = useRef(false);
-  const [hoveredBadge, setHoveredBadge] = useState<"instagram" | "linkedin" | null>(null);
+  const [hoveredBadge, setHoveredBadge] = useState<
+    "instagram" | "linkedin" | null
+  >(null);
   const [ctaHovered, setCtaHovered] = useState(false);
   const DESIGN_WEIGHT_MIN = 200;
   const DESIGN_WEIGHT_MAX = 750;
@@ -81,9 +88,20 @@ export function Hero() {
   const [abhayAngle, setAbhayAngle] = useState(DEFAULT_ABHAY_ANGLE);
   const [abhayHalfSize, setAbhayHalfSize] = useState({ w: 42, h: 19 });
   const [isAbhayTracking, setIsAbhayTracking] = useState(false);
+  // Below lg the desktop-only intro never runs, so "Design" must render its
+  // final state (real heading font) instead of the pre-"click" hand font.
+  const [isDesktopView, setIsDesktopView] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const update = () => setIsDesktopView(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
 
   const ctaArrowRef = useRef<HTMLAnchorElement>(null);
-  const underlineRef = useRef<HTMLImageElement>(null);
+  const underlineRef = useRef<SVGRectElement>(null);
   const socialsTagRef = useRef<HTMLSpanElement>(null);
   const socialsArrowPathRef = useRef<SVGPathElement>(null);
   const socialsArrowHeadRef = useRef<SVGPathElement>(null);
@@ -116,11 +134,8 @@ export function Hero() {
       const animateStep = (now: number) => {
         const elapsed = now - startTime;
         const progress = Math.min(elapsed / duration, 1);
-        // Smooth ease-in-out cubic easing
-        const easeProgress =
-          progress < 0.5
-            ? 4 * progress * progress * progress
-            : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+        // Smooth ease-out cubic easing
+        const easeProgress = 1 - Math.pow(1 - progress, 3);
 
         const currentAngle = startAngle + diff * easeProgress;
 
@@ -193,7 +208,7 @@ export function Hero() {
     abhayAngle,
     abhayHalfSize.w,
     abhayHalfSize.h,
-    ABHAY_ARROW_GAP
+    ABHAY_ARROW_GAP,
   );
   const abhayArrowX = abhayBoundary.x;
   const abhayArrowY = abhayBoundary.y;
@@ -251,7 +266,10 @@ export function Hero() {
             gsap.set(ctaArrowRef.current, { autoAlpha: 0, scale: 0.4 });
           }
           if (underlineRef.current) {
-            gsap.set(underlineRef.current, { scaleX: 0, autoAlpha: 1, transformOrigin: "left center" });
+            gsap.set(underlineRef.current, {
+              attr: { width: 0 },
+              autoAlpha: 1,
+            });
           }
           if (socialsTagRef.current) {
             gsap.set(socialsTagRef.current, { autoAlpha: 0, y: 10 });
@@ -273,13 +291,22 @@ export function Hero() {
 
           // FIRST: Center big text word by word from top to bottom
           wordEls.forEach((el, index) => {
-            tl.to(el, { autoAlpha: 1, y: 0, duration: 0.4 }, index === 0 ? 0.15 : "-=0.28");
+            tl.to(
+              el,
+              { autoAlpha: 1, y: 0, duration: 0.4 },
+              index === 0 ? 0.15 : "-=0.28",
+            );
 
             // Right arrow appears seamlessly alongside "Motion" at word index 2
             if (index === 2 && ctaArrowRef.current) {
               tl.to(
                 ctaArrowRef.current,
-                { autoAlpha: 1, scale: 1, duration: 0.45, ease: "back.out(1.7)" },
+                {
+                  autoAlpha: 1,
+                  scale: 1,
+                  duration: 0.45,
+                  ease: "back.out(1.7)",
+                },
                 "<",
               );
             }
@@ -289,7 +316,7 @@ export function Hero() {
           if (underlineRef.current) {
             tl.to(
               underlineRef.current,
-              { scaleX: 1, duration: 0.65, ease: "power2.out" },
+              { attr: { width: 290 }, duration: 0.65, ease: "power2.out" },
               "+=0.05",
             );
           }
@@ -305,7 +332,7 @@ export function Hero() {
           if (socialsArrowPathRef.current) {
             tl.to(
               socialsArrowPathRef.current,
-              { strokeDashoffset: 0, duration: 0.55, ease: "power2.inOut" },
+              { strokeDashoffset: 0, duration: 0.55, ease: "power2.out" },
               "-=0.15",
             );
           }
@@ -328,7 +355,7 @@ export function Hero() {
           if (asideScribblePathRef.current) {
             tl.to(
               asideScribblePathRef.current,
-              { strokeDashoffset: 0, duration: 0.75, ease: "power1.inOut" },
+              { strokeDashoffset: 0, duration: 0.75, ease: "power1.out" },
               "-=0.15",
             );
           }
@@ -336,7 +363,12 @@ export function Hero() {
           // Finally reveal remaining elements (badges and scroll cue)
           tl.to(
             "[data-hero-fade]",
-            { autoAlpha: 1, y: 0, duration: fadeDuration, stagger: fadeStagger },
+            {
+              autoAlpha: 1,
+              y: 0,
+              duration: fadeDuration,
+              stagger: fadeStagger,
+            },
             "-=0.2",
           );
 
@@ -402,34 +434,39 @@ export function Hero() {
     // Start with minimum weight at slider bottom
     setDesignWeight(DESIGN_WEIGHT_MIN);
 
-    // Measure exact bounding rectangles
+    // Measure exact bounding rectangles & sizes in screen space
     const abhayRect = abhayEl.getBoundingClientRect();
     const designRect = designEl.getBoundingClientRect();
     const trackRect = trackEl.getBoundingClientRect();
+    const arrowEl = abhayEl.querySelector<HTMLElement>("[data-abhay-arrow]");
+    const arrowRect = arrowEl?.getBoundingClientRect();
 
-    const abhayHalfW = abhayRect.width / 2;
-    const abhayHalfH = abhayRect.height / 2;
-    const abhayCenterX = abhayRect.left + abhayHalfW;
-    const abhayCenterY = abhayRect.top + abhayHalfH;
+    const abhayCenterX = abhayRect.left + abhayRect.width / 2;
+    const abhayCenterY = abhayRect.top + abhayRect.height / 2;
 
-    // Calculate exact arrow tip offset when pointing left (Math.PI)
-    const arrowBoundary = stadiumBoundaryPoint(
+    // Arrow tip offset from arrow box center in screen space:
+    // In 44x40 viewBox, arrow tip is at X=6, center at X=22, so offset is (16/44) * width.
+    const arrowWidth = arrowRect ? arrowRect.width : 32;
+    const arrowTipScreenLen = (16 / 44) * arrowWidth;
+
+    // Calculate exact arrow boundary offset from tag center in screen space when pointing left (Math.PI)
+    const arrowBoundaryScreen = stadiumBoundaryPoint(
       Math.PI,
-      abhayHalfW,
-      abhayHalfH,
-      ABHAY_ARROW_GAP,
+      abhayRect.width / 2,
+      abhayRect.height / 2,
+      (ABHAY_ARROW_GAP * abhayRect.height) / 38,
     );
 
-    // SVG arrow tip extends ~18px left of arrow center when rotated 180deg (Math.PI)
-    const ARROW_TIP_LENGTH = 18;
-    const arrowTipX = arrowBoundary.x - ARROW_TIP_LENGTH;
+    // Screen coordinates of arrow tip when abhayEl is at (0, 0)
+    const screenTipX = abhayCenterX + arrowBoundaryScreen.x - arrowTipScreenLen;
+    const screenTipY = abhayCenterY + arrowBoundaryScreen.y;
 
     // 1. Point arrow tip EXACTLY at the word "Design"
     const designTargetPointX = designRect.right;
     const designTargetPointY = designRect.top + designRect.height / 2;
 
-    const designTargetX = designTargetPointX - abhayCenterX - arrowTipX;
-    const designTargetY = designTargetPointY - abhayCenterY - arrowBoundary.y;
+    const designTargetX = designTargetPointX - screenTipX;
+    const designTargetY = designTargetPointY - screenTipY;
 
     const startX = Math.max(400, window.innerWidth - abhayRect.left + 120);
 
@@ -437,8 +474,8 @@ export function Hero() {
     const trackCenterX = trackRect.left + trackRect.width / 2;
     const sliderBottomPointY = trackRect.bottom - 4;
 
-    const sliderBottomX = trackCenterX - abhayCenterX - arrowTipX;
-    const sliderBottomY = sliderBottomPointY - abhayCenterY - arrowBoundary.y;
+    const sliderBottomX = trackCenterX - screenTipX;
+    const sliderBottomY = sliderBottomPointY - screenTipY;
 
     const DEFAULT_WEIGHT = 400;
     const defaultRatio =
@@ -446,19 +483,33 @@ export function Hero() {
       (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN);
     const sliderDefaultPointY =
       trackRect.bottom - defaultRatio * trackRect.height;
-    const sliderDefaultY =
-      sliderDefaultPointY - abhayCenterY - arrowBoundary.y;
+    const sliderDefaultY = sliderDefaultPointY - screenTipY;
 
     const tl = gsap.timeline({ delay: 0.25 });
 
-    tl.set(abhayEl, { x: startX, y: 0, opacity: 0, scale: 1 })
-      .to(abhayEl, {
-        x: designTargetX,
-        y: designTargetY,
-        opacity: 1,
-        duration: 1.2,
-        ease: "power2.out",
-      })
+    // Curved fly-in: x decelerates while y (starting low) accelerates,
+    // bowing the path so the tag swoops up onto "Design" instead of
+    // travelling in a straight line.
+    tl.set(abhayEl, { x: startX, y: designTargetY + 140, opacity: 0, scale: 1 })
+      .to(abhayEl, { opacity: 1, duration: 0.45, ease: "power1.out" })
+      .to(
+        abhayEl,
+        {
+          x: designTargetX,
+          duration: 1.2,
+          ease: "power2.out",
+        },
+        "<",
+      )
+      .to(
+        abhayEl,
+        {
+          y: designTargetY,
+          duration: 1.2,
+          ease: "power2.in",
+        },
+        "<",
+      )
       .to(abhayEl, {
         scale: 0.82,
         duration: 0.12,
@@ -490,10 +541,9 @@ export function Hero() {
         duration: 0.9,
         ease: "power1.inOut",
         onUpdate: function () {
-          const abhayCurrentY =
-            abhayRect.top + (gsap.getProperty(abhayEl, "y") as number);
-          const arrowTipY = abhayCurrentY + abhayHalfH + arrowBoundary.y;
-          const ratio = 1 - (arrowTipY - trackRect.top) / trackRect.height;
+          const currentY = gsap.getProperty(abhayEl, "y") as number;
+          const currentArrowTipY = screenTipY + currentY;
+          const ratio = 1 - (currentArrowTipY - trackRect.top) / trackRect.height;
           const clamped = Math.min(1, Math.max(0, ratio));
           const weight = Math.round(
             DESIGN_WEIGHT_MIN +
@@ -511,8 +561,10 @@ export function Hero() {
       .to(abhayEl, {
         x: 0,
         y: 0,
-        duration: 0.85,
+        duration: 1.85,
         ease: "power3.out",
+        // Once the tag has parked, sweep the arrow to its resting angle at
+        // its full unhurried pace (default 1200ms ease-in-out).
         onComplete: () => {
           startReturnToDefaultAnimation();
         },
@@ -568,20 +620,23 @@ export function Hero() {
 
     items.forEach((el) => {
       const rect = el.getBoundingClientRect();
-      const heroRect = scope.current?.getBoundingClientRect() || { width: window.innerWidth, left: 0 };
+      const heroRect = scope.current?.getBoundingClientRect() || {
+        width: window.innerWidth,
+        left: 0,
+      };
       const centerX = heroRect.left + heroRect.width / 2;
       const elCenterX = rect.left + rect.width / 2;
-      
+
       const offsetX = (elCenterX - centerX) / (heroRect.width / 2);
       const horizontalDrift = offsetX * gsap.utils.random(30, 80);
-      
+
       // Single consistent directional tilt (e.g. 18deg to 38deg in one direction)
       const sideSign = offsetX >= 0 ? 1 : -1;
       const tilt = sideSign * gsap.utils.random(24, 48);
-      
+
       // Distance to drop down offscreen
       const fallDistance = window.innerHeight + 250 - rect.top;
-      
+
       // Slow, graceful gravitational fall transition
       gsap.set(el, { transformOrigin: "50% 50%" });
       gsap.to(el, {
@@ -591,7 +646,7 @@ export function Hero() {
         opacity: 0,
         duration: gsap.utils.random(2.2, 3.0),
         delay: gsap.utils.random(0, 0.25),
-        ease: "power2.in",
+        ease: "power2.out",
       });
     });
 
@@ -634,7 +689,7 @@ export function Hero() {
     <section
       ref={scope}
       id="top"
-      className="relative flex min-h-svh flex-col justify-center overflow-hidden px-5 -pt-5"
+      className="relative flex min-h-svh flex-col justify-center overflow-hidden px-5"
     >
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div
@@ -660,10 +715,10 @@ export function Hero() {
 
       <div
         data-hero-inner
-        className="relative mx-auto flex w-full max-w-7xl flex-col items-center text-center px-5"
+        className="relative mx-auto flex w-full max-w-7xl min-[1440px]:max-w-[clamp(90rem,68vw,187rem)] flex-col items-center text-center px-0 sm:px-5 2xl:px-0"
       >
         {/* "for socials, apps..." tag + curved arrow, pointing into the headline */}
-        <div className="absolute top-3 left-12 hidden -rotate-9 lg:block">
+        <div className="absolute top-3 hidden -rotate-9 min-[1024px]:block origin-top-left min-[1024px]:left-[calc(50%-27rem)] min-[1024px]:scale-90 min-[1280px]:left-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:left-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:left-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:left-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:left-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:left-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:left-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:left-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:left-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:left-[calc(50%-108rem)] min-[4400px]:scale-295">
           <span
             ref={socialsTagRef}
             className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs font-medium text-[#4F6156]"
@@ -700,40 +755,48 @@ export function Hero() {
         {/* hand-written aside, top right */}
         <div
           ref={asideTagRef}
-          className="absolute -top-10 right-16 hidden w-50 rotate-10 text-right lg:block"
+          className="absolute -top-10 hidden rotate-10 text-right min-[1024px]:block origin-top-right min-[1024px]:right-[calc(50%-32rem)] min-[1024px]:scale-90 min-[1280px]:right-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:right-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:right-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:right-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:right-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:right-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:right-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:right-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:right-[calc(50%-108rem)] min-[4400px]:scale-295 w-36 min-[1280px]:w-42 min-[1440px]:w-42 min-[1600px]:w-44 min-[1920px]:w-44 min-[2400px]:w-48 min-[2800px]:w-60 min-[3300px]:w-64 min-[3840px]:w-72 min-[4400px]:w-76"
         >
-          <p className="font-hand text-xl leading-snug text-ink/90">
+          <p className="font-hand text-sm sm:text-base leading-snug text-ink/90">
             We give every project the love and affection it deserves :)
           </p>
           <svg
             viewBox="0 0 113 83"
             fill="none"
             aria-hidden
-            className="-ml-3 -mt-5 w-36 -rotate-10 text-ink/60"
+            className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-ink/80"
           >
             <path
               ref={asideScribblePathRef}
               opacity="0.7"
               d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
               stroke="currentColor"
-              strokeWidth="1.8"
+              strokeWidth="1"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
           </svg>
         </div>
 
-        <h1 className="mt-24 font-heading font-black leading-[1.05] tracking-normal [word-spacing:0.22em] text-ink md:mt-16">
-          <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
+        {/* mobile/tablet stand-in for the lg-only floating tag — keeps content parity below lg */}
+        <span
+          data-hero-fade
+          className="mt-16 mb-5 inline-block -rotate-2 rounded-full bg-[#F5F5F5] px-3.5 py-1.5 text-[11px] font-medium text-[#4F6156] sm:text-xs lg:hidden"
+        >
+          For Socials, Apps, Websites &amp; Products
+        </span>
+
+        <h1 className="mt-3 font-heading font-black leading-[1.05] tracking-normal [word-spacing:0.22em] text-ink lg:mt-16 text-[clamp(1.5rem,7vw,2.5rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,4.5vw,12.4rem)]">
+          <span className="block">
             {words([
               { text: "Retention", className: "font-[750]" },
               { text: "Driven", className: "font-normal" },
             ])}
           </span>
 
-          <span className="relative block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
+          <span className="relative block">
             <span className="group/cta relative inline-flex items-center">
-              <span className="inline-block transition-transform duration-700 ease-in-out group-has-[a:hover]/cta:-translate-x-[2.42em]">
+              <span className="inline-block transition-transform duration-700 ease-out group-has-[a:hover]/cta:-translate-x-[2.42em]">
                 {words([{ text: "Motion", className: "font-normal" }])}
               </span>
               <motion.a
@@ -746,9 +809,9 @@ export function Hero() {
                     affects the surrounding text flow (guarantees "& Design" never moves) */}
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-black/80 pr-[0.74em] transition-[width] duration-700 ease-in-out group-hover/arrow:w-[3.3em]"
+                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-black/80 pr-[0.74em] transition-[width] duration-700 ease-out group-hover/arrow:w-[3.2em]"
                 >
-                  <span className="mr-1.5 translate-x-2 whitespace-nowrap text-[0.4em] font-semibold text-cream opacity-0 transition-all duration-700 ease-in-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
+                  <span className="mr-3 translate-x-0 whitespace-nowrap text-[0.4em] font-semibold [word-spacing:normal] text-cream opacity-0 transition-all duration-700 ease-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
                     Book a call
                   </span>
                 </span>
@@ -784,9 +847,10 @@ export function Hero() {
                   }`}
                   style={{
                     fontWeight: designWeight,
-                    fontFamily: isDesignClicked
-                      ? "inherit"
-                      : "'Ink Free', var(--font-hand), var(--font-kalam), cursive",
+                    fontFamily:
+                      isDesignClicked || isDesktopView === false
+                        ? "inherit"
+                        : "'Ink Free', var(--font-hand), var(--font-kalam), cursive",
                   }}
                 >
                   Design
@@ -859,21 +923,23 @@ export function Hero() {
             <span
               ref={abhayRef}
               data-fall-item
-              className="absolute -right-16 top-1/2 hidden -translate-y-1/2 lg:block opacity-0"
+              className="absolute top-1/2 hidden -translate-y-1/2 min-[1024px]:block opacity-0 origin-left left-[calc(100%+1rem)] min-[1280px]:left-[calc(100%+1.5rem)] min-[1440px]:left-[calc(100%+2rem)] min-[1600px]:left-[calc(100%+2.5rem)] min-[2120px]:left-[calc(100%+2.75rem)] min-[2400px]:left-[calc(100%+3.1rem)] min-[2800px]:left-[calc(100%+3.6rem)] min-[3300px]:left-[calc(100%+4.3rem)] min-[3840px]:left-[calc(100%+4.9rem)] min-[4400px]:left-[calc(100%+5.6rem)] transition-all"
             >
+              {/* GSAP folds the CSS `scale` property into its own transform on the
+                  wrapper above (leaving `scale: none` inline), so the responsive
+                  scale steps must live on this inner span it never animates. */}
+              <span className="block origin-left min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[2120px]:scale-140 min-[2400px]:scale-155 min-[2800px]:scale-180 min-[3300px]:scale-215 min-[3840px]:scale-245 min-[4400px]:scale-280">
               <span
                 aria-hidden
+                data-abhay-arrow
                 style={{
-                  transform: `translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
+                  transform: `translate(-50%, -50%) translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
                 }}
-                className={`pointer-events-none absolute left-1/2 top-1/2 -ml-6 -mt-6 size-11 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform ease-out ${
+                className={`pointer-events-none absolute left-1/2 top-1/2 size-7.5 min-[1280px]:size-8 min-[1600px]:size-8.5 min-[1920px]:size-9 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform ease-out ${
                   isAbhayTracking ? "duration-150" : "duration-75"
                 }`}
               >
-                <svg
-                  viewBox="0 0 44 40"
-                  className="size-full overflow-visible"
-                >
+                <svg viewBox="0 0 44 40" className="size-full overflow-visible">
                   <path
                     d="M40 20 L6 4 L14 20 L6 36 Z"
                     fill="currentColor"
@@ -885,20 +951,21 @@ export function Hero() {
                 </svg>
               </span>
 
-              <span className="relative flex items-center rounded-full bg-[#1e7a00] px-4 py-1.5 text-base font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
+              <span className="relative flex items-center rounded-full bg-[#1e7a00] px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
                 Abhay
+              </span>
               </span>
             </span>
           </span>
 
-          <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
+          <span className="block">
             {words([
               { text: "for", className: "font-normal" },
               { text: "Results", className: "font-[750]" },
             ])}
             <span
               data-fall-item
-              className="relative mx-3.5 inline-block h-[0.95em] w-[1.5em] translate-y-[0.1em] align-middle"
+              className="relative mx-[0.12em] inline-block h-[0.95em] w-[1.5em] translate-y-[0.1em] align-middle"
             >
               {/* Instagram-style badge — left, tilted left, tucked behind */}
               <motion.span
@@ -910,7 +977,12 @@ export function Hero() {
                         opacity: 1,
                         scale: 1,
                         rotate: -12,
-                        y: hoveredBadge === "instagram" ? -8 : hoveredBadge === "linkedin" ? 8 : 0,
+                        y:
+                          hoveredBadge === "instagram"
+                            ? -8
+                            : hoveredBadge === "linkedin"
+                              ? 8
+                              : 0,
                         zIndex: hoveredBadge === "instagram" ? 30 : 10,
                       }
                     : {}
@@ -923,7 +995,7 @@ export function Hero() {
                 }}
                 onMouseEnter={() => setHoveredBadge("instagram")}
                 onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute left-0 top-[0.4em] z-10 flex size-[0.58em] translate-y-[-40%] cursor-pointer items-center justify-center rounded-xs ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                className="absolute left-0 top-[0.4em] z-10 flex size-[0.58em] translate-y-[-40%] cursor-pointer items-center justify-center rounded-sm ring-1 ring-black ring-offset-[0.1em] ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
                 style={{
                   background:
                     "linear-gradient(135deg, #f9ce34, #ee2a7b, #6228d7)",
@@ -941,7 +1013,12 @@ export function Hero() {
                         opacity: 1,
                         scale: 1,
                         rotate: 12,
-                        y: hoveredBadge === "linkedin" ? -8 : hoveredBadge === "instagram" ? 8 : 0,
+                        y:
+                          hoveredBadge === "linkedin"
+                            ? -8
+                            : hoveredBadge === "instagram"
+                              ? 8
+                              : 0,
                         zIndex: hoveredBadge === "linkedin" ? 30 : 20,
                       }
                     : {}
@@ -954,7 +1031,7 @@ export function Hero() {
                 }}
                 onMouseEnter={() => setHoveredBadge("linkedin")}
                 onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute right-[0.25em] top-1/2 z-20 flex size-[0.58em] translate-y-[-50%] cursor-pointer items-center justify-center rounded-xs bg-[#0a66c2] ring-1 ring-black ring-offset-8 ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                className="absolute right-[0.35em] top-1/2 z-20 flex size-[0.58em] translate-y-[-55%] cursor-pointer items-center justify-center rounded-sm bg-[#0a66c2] ring-1 ring-black ring-offset-[0.1em] ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
               >
                 <FaLinkedinIn className="size-[0.46em] text-white" />
               </motion.span>
@@ -962,21 +1039,44 @@ export function Hero() {
             {words([{ text: "Oriented", className: "font-[500]" }])}
           </span>
 
-          <span className="relative ml-[0.02em] inline-block overflow-visible align-top">
-            <span className="block text-[clamp(2.25rem,9vw,3.25rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,3.9vw,5rem)]">
+          <span className="ml-[0.02em] inline-block align-top">
+            <span className="relative inline-block overflow-visible">
+              <span>
+                {words([
+                  { text: "Founders", className: "italic font-semibold" },
+                ])}
+              </span>
+              <svg
+                viewBox="0 0 290 10"
+                aria-hidden
+                data-fall-item
+                className="absolute bottom-[-0.1em] left-[-2%] w-[100%] overflow-visible"
+              >
+                <defs>
+                  <clipPath id="underline-clip">
+                    <rect
+                      ref={underlineRef}
+                      x="0"
+                      y="0"
+                      width="290"
+                      height="10"
+                    />
+                  </clipPath>
+                </defs>
+                <image
+                  href="/underline.svg"
+                  width="290"
+                  height="10"
+                  clipPath="url(#underline-clip)"
+                  preserveAspectRatio="none"
+                />
+              </svg>
+            </span>
+            <span>
               {words([
-                { text: "Founders", className: "italic font-semibold" },
                 { text: ".", className: "text-coral" },
               ])}
             </span>
-            <motion.img
-              ref={underlineRef}
-              src="/underline.svg"
-              alt=""
-              aria-hidden
-              data-fall-item
-              className="absolute -bottom-3 left-[-2%] w-[104%] origin-left"
-            />
           </span>
         </h1>
       </div>
@@ -987,9 +1087,15 @@ export function Hero() {
         aria-label="Scroll to explore"
         data-hero-fade
         onClick={handleFallAway}
-        className="absolute bottom-6 right-4 z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:right-6 sm:size-14 md:bottom-10 md:right-8 lg:bottom-10 lg:right-12 lg:size-16 xl:right-16 2xl:right-20"
+        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
       >
-        <svg width="21" height="24" viewBox="0 0 21 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <svg
+          width="21"
+          height="24"
+          viewBox="0 0 21 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
           <path
             d="M10.5 1V11.75V22.5M20 14L10.5 22.5L1 14"
             stroke="currentColor"
@@ -998,7 +1104,6 @@ export function Hero() {
             strokeLinejoin="round"
           />
         </svg>
-
       </button>
     </section>
   );
