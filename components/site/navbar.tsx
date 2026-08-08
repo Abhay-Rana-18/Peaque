@@ -24,7 +24,7 @@ function NavLink({
     <a
       href={href}
       onClick={onClick}
-      className="group relative px-1.5 py-2 font-medium text-ink/80 transition-colors cursor-pointer hover:text-ink text-sm sm:text-base xl:text-[1.05rem]"
+      className="group relative px-1.5 py-2 font-medium text-ink/80 transition-colors cursor-pointer hover:text-ink text-sm sm:text-base xl:text-[1.05rem] min-[1600px]:text-xl min-[1600px]:px-2.5 min-[1920px]:text-2xl min-[1920px]:px-3 min-[2400px]:text-3xl min-[2400px]:px-4 min-[2800px]:text-4xl min-[2800px]:px-5 min-[3300px]:text-5xl min-[3300px]:px-6 min-[3840px]:text-6xl min-[3840px]:px-7 min-[4400px]:text-7xl min-[4400px]:px-9"
     >
       {label}
       <svg
@@ -57,21 +57,21 @@ export function Navbar() {
       <motion.div
         aria-hidden
         style={{ scaleX }}
-        className="absolute inset-x-0 top-0 h-[3px] origin-left bg-moss pointer-events-auto"
+        className="absolute inset-x-0 top-0 h-[3px] min-[1920px]:h-[4px] min-[2800px]:h-[6px] min-[3300px]:h-[8px] min-[3840px]:h-[10px] min-[4400px]:h-[12px] origin-left bg-moss pointer-events-auto"
       />
-      <div className="relative mx-auto flex w-full max-w-[2560px] items-center justify-center px-6 py-4 min-[1440px]:py-5">
+      <div className="relative flex w-full items-center justify-center px-6 py-4 min-[1440px]:py-5 min-[1920px]:py-6 min-[2400px]:py-7 min-[2800px]:py-8 min-[3300px]:py-10 min-[3840px]:py-12 min-[4400px]:py-14">
         {/* Logo — Fixed Anchored Left */}
         <a
           href="#top"
           aria-label="Peaque — back to top"
-          className="pointer-events-auto absolute left-[clamp(1.5rem,5vw,6rem)] flex-shrink-0"
+          className="pointer-events-auto absolute left-[clamp(1.5rem,5vw,6rem)] min-[1920px]:left-[clamp(2rem,5vw,8rem)] min-[2400px]:left-[clamp(2.5rem,5vw,10rem)] min-[2800px]:left-[clamp(3rem,5vw,12rem)] min-[3300px]:left-[clamp(3.5rem,5vw,15rem)] min-[3840px]:left-[clamp(4rem,5vw,18rem)] min-[4400px]:left-[clamp(4.5rem,5vw,22rem)] flex-shrink-0"
         >
           <svg
             width="82"
             height="21"
             viewBox="0 0 82 21"
             fill="none"
-            className="h-6 w-auto sm:h-6.5 lg:h-7 xl:h-7.5 transition-all"
+            className="h-6 w-auto sm:h-6.5 lg:h-7 xl:h-7.5 min-[1600px]:h-9 min-[1920px]:h-10 min-[2400px]:h-12 min-[2800px]:h-14 min-[3300px]:h-16 min-[3840px]:h-20 min-[4400px]:h-24 transition-all"
           >
             <path
               d="M23.7912 12.9207C23.4167 12.9207 23.1268 12.818 22.9214 12.6126C22.7281 12.3952 22.6314 12.0992 22.6314 11.7247V1.1779C22.6314 0.79131 22.7341 0.501365 22.9395 0.308068C23.1449 0.102689 23.4348 1.37832e-07 23.8094 1.37832e-07H28.1767C29.5781 1.37832e-07 30.6593 0.350351 31.4204 1.05105C32.1815 1.75176 32.5621 2.73032 32.5621 3.98676C32.5621 5.24319 32.1815 6.22779 31.4204 6.94058C30.6593 7.64128 29.5781 7.99163 28.1767 7.99163H24.951V11.7247C24.951 12.0992 24.8544 12.3952 24.6611 12.6126C24.4678 12.818 24.1778 12.9207 23.7912 12.9207ZM24.951 6.16135H27.8142C28.6357 6.16135 29.2579 5.98013 29.6808 5.6177C30.1036 5.24319 30.315 4.69954 30.315 3.98676C30.315 3.27397 30.1036 2.73636 29.6808 2.37393C29.2579 2.0115 28.6357 1.83028 27.8142 1.83028H24.951V6.16135Z"
@@ -93,17 +93,17 @@ export function Navbar() {
         </a>
 
         {/* Links — Centered & Spaced out smoothly */}
-        <div className="pointer-events-auto hidden items-center justify-center gap-6 lg:flex lg:gap-8 xl:gap-10">
+        <div className="pointer-events-auto hidden items-center justify-center gap-6 lg:flex lg:gap-8 xl:gap-10 min-[1600px]:gap-12 min-[1920px]:gap-14 min-[2400px]:gap-16 min-[2800px]:gap-20 min-[3300px]:gap-24 min-[3840px]:gap-28 min-[4400px]:gap-36">
           {links.map((l) => (
             <NavLink key={l.href} {...l} />
           ))}
         </div>
 
         {/* Contact Us Button — Fixed Anchored Right */}
-        <div className="pointer-events-auto absolute right-[clamp(1.5rem,5vw,6rem)] flex items-center">
+        <div className="pointer-events-auto absolute right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] flex items-center">
           <a
             href="#contact"
-            className="hidden rounded-full border-2 border-ink px-5 py-2 text-sm font-semibold text-ink transition-all hover:bg-ink hover:text-cream lg:inline-block xl:px-6 xl:py-2.5 xl:text-base"
+            className="hidden rounded-full border-2 border-ink px-5 py-2 text-sm font-semibold text-ink transition-all hover:bg-ink hover:text-cream lg:inline-block xl:px-6 xl:py-2.5 xl:text-base min-[1600px]:px-8 min-[1600px]:py-3 min-[1600px]:text-xl min-[1600px]:border-3 min-[1920px]:px-9 min-[1920px]:py-3.5 min-[1920px]:text-2xl min-[1920px]:border-3 min-[2400px]:px-11 min-[2400px]:py-4 min-[2400px]:text-3xl min-[2400px]:border-4 min-[2800px]:px-13 min-[2800px]:py-5 min-[2800px]:text-4xl min-[2800px]:border-[5px] min-[3300px]:px-16 min-[3300px]:py-6 min-[3300px]:text-5xl min-[3300px]:border-[5px] min-[3840px]:px-19 min-[3840px]:py-7 min-[3840px]:text-6xl min-[3840px]:border-[4px] min-[4400px]:px-22 min-[4400px]:py-8 min-[4400px]:text-7xl min-[4400px]:border-[3px]"
           >
             Contact Us
           </a>

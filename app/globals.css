@@ -148,6 +148,7 @@
 
   /* handwriting is "written in pencil" — graphite grain + slight wobble */
   .font-hand,
+  .font-kalam,
   .pencil-text {
     filter: url(#pencil-text);
   }

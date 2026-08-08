@@ -3,10 +3,164 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { gsap } from "@/lib/gsap";
 import { motion } from "motion/react";
-import { FaInstagram, FaLinkedinIn } from "react-icons/fa6";
-import { DotGrid } from "./dot-grid";
+import { DotGridZoom } from "./dot-grid-zoom";
+import { TorusKnot3D } from "./three/torus-knot";
 
-type Token = { text: string; className?: string };
+type Token = {
+  text: string;
+  name: string;
+  className?: string;
+  /**
+   * Drops the trailing space. Words normally carry one so they separate, but it
+   * is a real space character and the h1's `[word-spacing:0.22em]` applies on
+   * top of it — about 0.48em together. Before the badge slot that reads as a
+   * lopsided gap, since nothing sits on the slot's other side.
+   */
+  tight?: boolean;
+};
+
+/**
+ * Headline values taken from the Figma "Main" frame (1440x810, node 1:16879).
+ * Type is Archivo at 63.549px / 65px line-height, so all the geometry below is
+ * expressed as a fraction of that size and stays on the existing type scale.
+ *
+ * The emphasised words are NOT `--ink` (#26311c) — that token is the site's
+ * body green and is right elsewhere, but the headline uses a deeper one.
+ */
+const HEADLINE_GREEN = "text-[#142b01]";
+/** The period after "Founders" — see the notes about `--coral` being #e8734a. */
+const HEADLINE_CORAL = "text-[#ef7c58]";
+
+/**
+ * Social badge geometry, in em of the headline font-size.
+ *
+ * Both badges are the same object in Figma: a 50x50 white tile, `rounded-[7px]`,
+ * 1px black border, with a two-stop shade over it and a soft double shadow. Only
+ * their rotation and their glyph differ — Instagram -11.04deg, LinkedIn +18.26deg.
+ */
+const BADGE = {
+  /**
+   * The tile itself, before rotation — the single number that sets the size.
+   * 1em matches the headline font size. Everything else below is a multiple of
+   * this, so changing it rescales the pair and its slot together.
+   */
+  tile: 1,
+  /**
+   * Rotated bounding box of a square tile = side * (|cos| + |sin|), so the
+   * tiles occupy more room than `tile` and the two differ because their angles
+   * do. The slot spans both half-boxes plus the 0.692 centre-to-centre gap.
+   */
+  slot: 1.91,
+  /**
+   * The slot while the pair is still stacked. Both badges sit on the slot's
+   * centre until the fan, so this only has to hold the WIDER of the two boxes —
+   * LinkedIn's, which fills it exactly with no slack. The slot then widens to
+   * `slot` in step with the fan, so the room the pair needs is made in real
+   * time by pushing the words apart rather than being reserved up front.
+   */
+  slotCollapsed: 1.263,
+  /**
+   * Where each tile ends up, measured from the slot's CENTRE as a share of one
+   * tile's width. Centre-relative rather than left-relative on purpose: the
+   * slot's width is animating underneath, so anything anchored to its left edge
+   * would drift as it grows. Anchored to the centre, 0 is the stacked position
+   * for both and these are simply the fan's destinations.
+   * Not symmetric, because the two rotated boxes are not the same size.
+   */
+  instagramRest: "-36.85%",
+  linkedinRest: "32.35%",
+  /** each badge's resting angle; the fan starts from flat by cancelling it */
+  instagramTilt: -11.04,
+  linkedinTilt: 18.26,
+  /**
+   * instagram.svg and Linkedin-svg.svg carry their own tile, border, shadow AND
+   * rotation baked into the artwork, on oversized canvases sized for shadow bleed.
+   * So they render at their respective imgScales relative to the tile and are
+   * placed by the tile's centre within that canvas, not by the image's own centre.
+   */
+  instagramImgScale: 1.9437,
+  instagramTileCentreX: "49.59%",
+  instagramTileCentreY: "34.63%",
+  linkedinImgScale: 1.8528,
+  linkedinTileCentreX: "49.70%",
+  linkedinTileCentreY: "35.13%",
+} as const;
+
+/**
+ * On-load onset table, in seconds.
+ *
+ * The spec quotes absolute times from page load, where the curtain begins its
+ * lift at 0.967s. We run a Lottie preloader of our own instead of the spec's
+ * signature draw, so the hero's clock is re-based to the curtain start: every
+ * value below is `specTime - 0.967`, and t=0 is the `peaque:reveal` event that
+ * the loader fires as the curtain starts moving.
+ *
+ * The cadence is hand-tuned, not a uniform stagger (gaps run 0.07 - 0.24s), so
+ * these are absolute positions on the timeline rather than a `stagger` value.
+ */
+const AT = {
+  // §4c — headline word cascade
+  retention: 0.533, //   1.50s
+  driven: 0.753, //      1.72s
+  motion: 0.993, //      1.96s
+  arrowPill: 1.063, //   2.03s
+  cursorIn: 1.133, //    2.10s
+  amp: 1.243, //         2.21s
+  design: 1.353, //      2.32s
+  for: 1.503, //         2.47s
+  results: 1.593, //     2.56s
+  linkedin: 1.793, //    2.76s
+  oriented: 1.933, //    2.90s
+  founders: 2.023, //    2.99s
+  // §5 — the "Figma" beat
+  designSwap: 2.053, //  3.02s
+  instagram: 2.403, //   3.37s
+  // §6 — hand-drawn accents
+  tagLeft: 2.463, //     3.43s
+  underline: 2.603, //   3.57s
+  arrowLeft: 2.713, //   3.68s
+  noteRight: 3.383, //   4.35s
+  squiggle: 3.483, //    4.45s
+} as const;
+
+// §4b/§9 — entrance distances are quoted at the reference's ~62px headline type
+// size and must scale with our type scale rather than being pinned to px.
+const WORD_RISE_EM = 24 / 62;
+// §4d — the block is centre-anchored, so it drifts up as lines are added.
+const BLOCK_DRIFT_EM = 126 / 62;
+// §5a — the cursor enters 117px below where it lands on "Design".
+const CURSOR_ENTRY_RISE_EM = 117 / 62;
+// The block has finished re-centring once the last line has settled.
+const DRIFT_END = AT.founders + 0.5;
+
+/**
+ * The "Abhay" cursor's journey, on the same reveal-relative clock as `AT`.
+ *
+ * This deliberately supersedes §5a's ending. The spec has the cursor retreat
+ * ~45px and freeze the moment it clicks; here it carries on to the weight
+ * slider that the click just revealed, drags it up from the bottom of its
+ * range, parks, and only *then* lets the arrow swing round to its resting
+ * angle. Everything up to and including the click at `AT.designSwap` is
+ * unchanged from the spec.
+ *
+ * Consequence worth knowing: the sequence now settles around 6.1s rather than
+ * the spec's 5.6s, so §10's "completely static from 5.6s" no longer holds.
+ */
+const CURSOR = {
+  /** beat after the click before it heads for the slider */
+  toSliderGap: 0.1,
+  toSliderDur: 0.45,
+  /** presses the handle */
+  grabDur: 0.09,
+  /** drags it up; the weight rises with the arrow tip */
+  dragDur: 0.7,
+  releaseDur: 0.14,
+  /** beat after releasing before it leaves for its parked spot */
+  parkGap: 0.07,
+  parkDur: 0.8,
+  /** only once parked does the arrow sweep to its default angle */
+  arrowSettleMs: 700,
+} as const;
 
 // Point on a stadium / rounded-pill shape outline of half-width `a` and half-height `b`
 // at direction `angle` from center, offset by an exact uniform distance `gap`.
@@ -76,13 +230,14 @@ export function Hero() {
   const [ctaHovered, setCtaHovered] = useState(false);
   const DESIGN_WEIGHT_MIN = 200;
   const DESIGN_WEIGHT_MAX = 750;
-  const [designWeight, setDesignWeight] = useState(400);
+  // Where the cursor leaves the slider, and therefore the resting weight.
+  const DESIGN_WEIGHT_DEFAULT = 400;
+  const [designWeight, setDesignWeight] = useState(DESIGN_WEIGHT_DEFAULT);
   const designTrackRef = useRef<HTMLSpanElement>(null);
   const abhayRef = useRef<HTMLSpanElement>(null);
   const designWordRef = useRef<HTMLSpanElement>(null);
   const [isDesignClicked, setIsDesignClicked] = useState(false);
-  const [designPulsing, setDesignPulsing] = useState(false);
-  const ABHAY_ARROW_GAP = 24;
+  const ABHAY_ARROW_GAP = 20;
   const ABHAY_REACT_RADIUS = 160;
   const DEFAULT_ABHAY_ANGLE = -2.7;
   const [abhayAngle, setAbhayAngle] = useState(DEFAULT_ABHAY_ANGLE);
@@ -91,16 +246,55 @@ export function Hero() {
   // Below lg the desktop-only intro never runs, so "Design" must render its
   // final state (real heading font) instead of the pre-"click" hand font.
   const [isDesktopView, setIsDesktopView] = useState<boolean | null>(null);
+  // §9 — under reduced motion nothing animates, so the "click" that would
+  // normally select "Design" never happens; the rest state has to be rendered.
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
 
   useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const update = () => setIsDesktopView(mq.matches);
+    const desktopMq = window.matchMedia("(min-width: 1024px)");
+    const reducedMq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => {
+      setIsDesktopView(desktopMq.matches);
+      setPrefersReducedMotion(reducedMq.matches);
+    };
     update();
-    mq.addEventListener("change", update);
-    return () => mq.removeEventListener("change", update);
+    desktopMq.addEventListener("change", update);
+    reducedMq.addEventListener("change", update);
+    return () => {
+      desktopMq.removeEventListener("change", update);
+      reducedMq.removeEventListener("change", update);
+    };
   }, []);
 
+  const designSelected = isDesignClicked || prefersReducedMotion;
+  // Shared by the visible word and the ghost that sizes its box, so the box
+  // follows the family swap but not the weight.
+  const designFontFamily =
+    designSelected || isDesktopView === false
+      ? "inherit"
+      : "'Ink Free', var(--font-hand), var(--font-kalam), cursive";
+
+  // Social badge choreography. LinkedIn snaps in alone, untilted, at the centre
+  // of the pair's slot — a single card. At AT.instagram the two fan apart from
+  // that shared spot: LinkedIn slides right and tilts one way while Instagram
+  // emerges from behind it (it sits a layer lower) sliding left and tilting the
+  // other. Per-property transitions give LinkedIn its two separate beats
+  // without needing a second piece of state to track the stage.
+  const badgeSnap = prefersReducedMotion
+    ? { duration: 0 }
+    : { duration: 0.11, delay: AT.linkedin, ease: "easeOut" as const };
+  const badgeFan = prefersReducedMotion
+    ? { duration: 0 }
+    : { duration: 0.18, delay: AT.instagram, ease: "easeOut" as const };
+  // The hover lift must never inherit an entrance delay.
+  const badgeHover = { duration: 0.3, delay: 0, ease: "easeOut" as const };
+
   const ctaArrowRef = useRef<HTMLAnchorElement>(null);
+  // Line 2 ("Motion (→) & Design") and the group holding just "Motion" and its
+  // arrow. Both are needed to work out how far the line has to start displaced
+  // for that group alone to read as centred — see `motionLeadShift`.
+  const line2Ref = useRef<HTMLSpanElement>(null);
+  const motionGroupRef = useRef<HTMLSpanElement>(null);
   const underlineRef = useRef<SVGRectElement>(null);
   const socialsTagRef = useRef<HTMLSpanElement>(null);
   const socialsArrowPathRef = useRef<SVGPathElement>(null);
@@ -213,6 +407,31 @@ export function Hero() {
   const abhayArrowX = abhayBoundary.x;
   const abhayArrowY = abhayBoundary.y;
 
+  /**
+   * How far line 2 has to sit to the right for "Motion" and its arrow to read
+   * as centred on their own, before "& Design" exist to balance them.
+   *
+   * The line is centre-aligned, so its content [L, R] straddles the centre C.
+   * For the lead group alone to straddle C instead, everything shifts by
+   * s = (R - groupRight) / 2 — half the width of what follows it. Shifting the
+   * whole line rather than the group alone is what makes this read as the line
+   * re-centring: "Motion" slides left while "& Design" arrive from the right,
+   * instead of "Motion" sliding out from underneath them.
+   *
+   * Measured lazily, never at mount: the widths are only meaningful once the
+   * headline's fonts have loaded, which the loader gates the reveal on.
+   */
+  const motionLeadShift = useCallback(() => {
+    const group = motionGroupRef.current;
+    const design = designWordRef.current;
+    if (!group || !design) return 0;
+    return (
+      (design.getBoundingClientRect().right -
+        group.getBoundingClientRect().right) /
+      2
+    );
+  }, []);
+
   const updateDesignWeightFromPointer = (clientY: number) => {
     const el = designTrackRef.current;
     if (!el) return;
@@ -232,20 +451,31 @@ export function Hero() {
 
       mm.add(
         {
-          isMobile: "(max-width: 639px)",
-          isTablet: "(min-width: 640px) and (max-width: 1023px)",
+          // `isSmall` exists purely so at least one query always matches —
+          // gsap.matchMedia skips the callback entirely otherwise.
+          isSmall: "(max-width: 1023px)",
           isDesktop: "(min-width: 1024px)",
+          reduced: "(prefers-reduced-motion: reduce)",
         },
         (context) => {
-          const { isMobile } = context.conditions as {
-            isMobile: boolean;
-            isTablet: boolean;
+          const { isDesktop, reduced } = context.conditions as {
+            isSmall: boolean;
+            isDesktop: boolean;
+            reduced: boolean;
           };
 
-          const fadeY = isMobile ? 14 : 24;
-          const fadeDuration = isMobile ? 0.6 : 0.8;
-          const fadeStagger = isMobile ? 0.08 : 0.12;
-          const parallaxDistance = isMobile ? -6 : -12;
+          const headEl = scope.current?.querySelector<HTMLElement>("h1");
+          const wordEls = gsap.utils.toArray<HTMLElement>("[data-word]");
+          const introFadeEls =
+            gsap.utils.toArray<HTMLElement>("[data-intro-fade]");
+          const wordEl = (name: string) =>
+            scope.current?.querySelector<HTMLElement>(`[data-word="${name}"]`);
+
+          const strokePaths = [
+            socialsArrowPathRef.current,
+            socialsArrowHeadRef.current,
+            asideScribblePathRef.current,
+          ];
 
           const preparePath = (pathEl: SVGPathElement | null) => {
             if (!pathEl) return 0;
@@ -258,126 +488,33 @@ export function Hero() {
             return length;
           };
 
-          const wordEls = gsap.utils.toArray<HTMLElement>("[data-word]");
-
-          // Initial hidden state setup
-          gsap.set(wordEls, { autoAlpha: 0, y: 16 });
-          if (ctaArrowRef.current) {
-            gsap.set(ctaArrowRef.current, { autoAlpha: 0, scale: 0.4 });
-          }
-          if (underlineRef.current) {
-            gsap.set(underlineRef.current, {
-              attr: { width: 0 },
-              autoAlpha: 1,
-            });
-          }
-          if (socialsTagRef.current) {
-            gsap.set(socialsTagRef.current, { autoAlpha: 0, y: 10 });
-          }
-          preparePath(socialsArrowPathRef.current);
-          preparePath(socialsArrowHeadRef.current);
-
-          if (asideTagRef.current) {
-            gsap.set(asideTagRef.current, { autoAlpha: 0, y: 10 });
-          }
-          preparePath(asideScribblePathRef.current);
-          gsap.set("[data-hero-fade]", { autoAlpha: 0, y: fadeY });
-
-          // Paused until the loader lifts
-          const tl = gsap.timeline({
-            paused: true,
-            defaults: { ease: "power3.out" },
-          });
-
-          // FIRST: Center big text word by word from top to bottom
-          wordEls.forEach((el, index) => {
-            tl.to(
-              el,
-              { autoAlpha: 1, y: 0, duration: 0.4 },
-              index === 0 ? 0.15 : "-=0.28",
-            );
-
-            // Right arrow appears seamlessly alongside "Motion" at word index 2
-            if (index === 2 && ctaArrowRef.current) {
-              tl.to(
-                ctaArrowRef.current,
-                {
-                  autoAlpha: 1,
-                  scale: 1,
-                  duration: 0.45,
-                  ease: "back.out(1.7)",
-                },
-                "<",
-              );
+          // The hand-placed annotations sit at a deliberate angle (`-rotate-9`
+          // on the left tag's container, `-rotate-2` on its inline stand-in).
+          // Tailwind v4 emits those as the standalone `rotate` property, which
+          // composes with the `transform` GSAP writes instead of being
+          // overwritten by it — so a `rotation` of exactly the negation of the
+          // CSS tilt renders the element visually straight, and easing that to
+          // 0 lets it settle into the angle the class already specifies.
+          // Reading the value back off the DOM keeps the markup the single
+          // source of truth for the angle; retype the class and this follows.
+          const cssTiltOf = (el: HTMLElement | null) => {
+            for (
+              let node = el;
+              node && node !== scope.current;
+              node = node.parentElement
+            ) {
+              const rotate = getComputedStyle(node).rotate;
+              if (rotate && rotate !== "none") return parseFloat(rotate) || 0;
             }
-          });
-
-          // When "Founders." is loaded, its bottom line animates from start to end (left to right)
-          if (underlineRef.current) {
-            tl.to(
-              underlineRef.current,
-              { attr: { width: 290 }, duration: 0.65, ease: "power2.out" },
-              "+=0.05",
-            );
-          }
-
-          // SECONDLY: 'For socials, Apps, websites & Products' is loaded and after it below arrow is animated rendering from start to end
-          if (socialsTagRef.current) {
-            tl.to(
-              socialsTagRef.current,
-              { autoAlpha: 1, y: 0, duration: 0.45, ease: "power2.out" },
-              "+=0.15",
-            );
-          }
-          if (socialsArrowPathRef.current) {
-            tl.to(
-              socialsArrowPathRef.current,
-              { strokeDashoffset: 0, duration: 0.55, ease: "power2.out" },
-              "-=0.15",
-            );
-          }
-          if (socialsArrowHeadRef.current) {
-            tl.to(
-              socialsArrowHeadRef.current,
-              { strokeDashoffset: 0, duration: 0.25, ease: "power2.out" },
-              "-=0.1",
-            );
-          }
-
-          // THIRDLY: "We give every project..." is loaded and after it below SVG is animated rendering from start to end
-          if (asideTagRef.current) {
-            tl.to(
-              asideTagRef.current,
-              { autoAlpha: 1, y: 0, duration: 0.45, ease: "power2.out" },
-              "+=0.15",
-            );
-          }
-          if (asideScribblePathRef.current) {
-            tl.to(
-              asideScribblePathRef.current,
-              { strokeDashoffset: 0, duration: 0.75, ease: "power1.out" },
-              "-=0.15",
-            );
-          }
-
-          // Finally reveal remaining elements (badges and scroll cue)
-          tl.to(
-            "[data-hero-fade]",
-            {
-              autoAlpha: 1,
-              y: 0,
-              duration: fadeDuration,
-              stagger: fadeStagger,
-            },
-            "-=0.2",
-          );
-
-          introRef.current = tl;
-          if (revealedRef.current) tl.play();
+            return 0;
+          };
+          // Held back until the fade has landed, so the tag is unmistakably
+          // straight before it leans over rather than doing both at once.
+          const tiltSettleAt = AT.tagLeft + 0.19;
 
           // gentle parallax out as you scroll away
           gsap.to("[data-hero-inner]", {
-            yPercent: parallaxDistance,
+            yPercent: isDesktop ? -12 : -6,
             autoAlpha: 0.25,
             ease: "none",
             scrollTrigger: {
@@ -387,6 +524,233 @@ export function Hero() {
               scrub: true,
             },
           });
+
+          // §9 — `prefers-reduced-motion`: render the rest state immediately and
+          // run no sequence at all.
+          if (reduced) {
+            gsap.set(wordEls, { autoAlpha: 1, y: 0 });
+            // rotation 0 leaves the CSS tilt showing on its own — the rest state
+            gsap.set(introFadeEls, { autoAlpha: 1, y: 0, rotation: 0 });
+            if (headEl) gsap.set(headEl, { y: 0 });
+            if (ctaArrowRef.current) {
+              gsap.set(ctaArrowRef.current, { autoAlpha: 1, scale: 1 });
+            }
+            if (underlineRef.current) {
+              gsap.set(underlineRef.current, {
+                attr: { width: 290 },
+                autoAlpha: 1,
+              });
+            }
+            gsap.set([socialsTagRef.current, asideTagRef.current], {
+              autoAlpha: 1,
+              y: 0,
+              rotation: 0,
+            });
+            strokePaths.forEach((p) => {
+              if (p) {
+                gsap.set(p, {
+                  strokeDasharray: "none",
+                  strokeDashoffset: 0,
+                  autoAlpha: 1,
+                });
+              }
+            });
+            introRef.current = null;
+            return;
+          }
+
+          // Distances scale with the type scale so the timeline stays identical
+          // at every breakpoint while the travel stays proportional (§9).
+          const headFont = headEl
+            ? parseFloat(getComputedStyle(headEl).fontSize) || 62
+            : 62;
+          const wordRise = headFont * WORD_RISE_EM;
+          const drift = headFont * BLOCK_DRIFT_EM;
+
+          // Initial hidden state setup
+          gsap.set(wordEls, { autoAlpha: 0, y: wordRise });
+          // The drift moves the entire headline subtree, so promote it for the
+          // duration and drop the hint again once it lands (§9).
+          if (headEl) gsap.set(headEl, { y: drift, willChange: "transform" });
+          if (ctaArrowRef.current) {
+            gsap.set(ctaArrowRef.current, { autoAlpha: 0, scale: 0 });
+          }
+          if (underlineRef.current) {
+            gsap.set(underlineRef.current, {
+              attr: { width: 0 },
+              autoAlpha: 1,
+            });
+          }
+          if (socialsTagRef.current) {
+            gsap.set(socialsTagRef.current, {
+              autoAlpha: 0,
+              y: 10,
+              rotation: -cssTiltOf(socialsTagRef.current),
+            });
+          }
+          if (asideTagRef.current) {
+            gsap.set(asideTagRef.current, { autoAlpha: 0, y: 8 });
+          }
+          gsap.set(introFadeEls, {
+            autoAlpha: 0,
+            y: 10,
+            rotation: (_i: number, el: HTMLElement) => -cssTiltOf(el),
+          });
+          strokePaths.forEach(preparePath);
+
+          // Paused until the loader's curtain starts lifting. `power3.out` is
+          // the spec's word ease — cubic-bezier(0.165, 0.84, 0.44, 1).
+          const tl = gsap.timeline({
+            paused: true,
+            defaults: { ease: "power3.out" },
+          });
+
+          /* ---------- §4 : headline word cascade ---------- */
+          const word = (name: string, at: number) => {
+            const el = wordEl(name);
+            if (el) tl.to(el, { autoAlpha: 1, y: 0, duration: 0.5 }, at);
+          };
+
+          word("retention", AT.retention);
+          word("driven", AT.driven);
+          word("motion", AT.motion);
+          word("amp", AT.amp);
+          word("design", AT.design);
+          word("for", AT.for);
+          word("results", AT.results);
+          word("oriented", AT.oriented);
+          // the orange period lands with "Founders", not after it
+          word("founders", AT.founders);
+          word("period", AT.founders);
+
+          // §4d — the block is vertically centred, so it rides upward as lines
+          // are added. Our four lines are always in the DOM at full height
+          // (words are hidden with autoAlpha, never `display:none`), so the
+          // drift has to be driven rather than falling out of the centring.
+          //
+          // This is ONE continuous glide spanning the whole cascade, not a tween
+          // per line. Stepping it — even with the steps butted up against each
+          // other — makes every step ease to a dead stop before the next picks
+          // up, and the block visibly lurches between four resting positions.
+          // A single eased move reads the way the reference does: the block is
+          // never not moving between the first word and the last one settling.
+          if (headEl) {
+            tl.to(
+              headEl,
+              {
+                y: 0,
+                duration: DRIFT_END - AT.retention,
+                ease: "power1.inOut",
+                onComplete: () => gsap.set(headEl, { willChange: "auto" }),
+              },
+              AT.retention,
+            );
+          }
+
+          // orange arrow pill — no visible overshoot in the reference
+          if (ctaArrowRef.current) {
+            tl.to(
+              ctaArrowRef.current,
+              {
+                autoAlpha: 1,
+                scale: 1,
+                duration: 0.25,
+                ease: "power2.out",
+              },
+              AT.arrowPill,
+            );
+          }
+
+          // "Motion" and its arrow land centred on their own, then the line
+          // slides back into true as the rest of it arrives — the word acting
+          // out what it says. The displacement is applied at reveal (it has to
+          // be measured, so it cannot be baked in here); this only walks it
+          // back. Timed to start with "&" and finish exactly as "Design"
+          // settles, so the travel lasts precisely as long as the remaining
+          // text takes to render.
+          if (line2Ref.current) {
+            tl.to(
+              line2Ref.current,
+              {
+                x: 0,
+                duration: AT.design + 0.5 - AT.amp,
+                ease: "power2.inOut",
+              },
+              AT.amp,
+            );
+          }
+
+          /* ---------- §6 : hand-drawn accents ---------- */
+
+          // underline under "Founders" — draws left to right
+          if (underlineRef.current) {
+            tl.to(
+              underlineRef.current,
+              { attr: { width: 290 }, duration: 0.33, ease: "power1.inOut" },
+              AT.underline,
+            );
+          }
+
+          // the lg-only floating tag; below lg the inline stand-in takes its beat
+          tl.to(
+            introFadeEls,
+            { autoAlpha: 1, y: 0, duration: 0.19, ease: "power2.out" },
+            AT.tagLeft,
+          ).to(
+            introFadeEls,
+            { rotation: 0, duration: 0.38, ease: "power2.out" },
+            tiltSettleAt,
+          );
+
+          if (isDesktop) {
+            if (socialsTagRef.current) {
+              // lands flat...
+              tl.to(
+                socialsTagRef.current,
+                { autoAlpha: 1, y: 0, duration: 0.19, ease: "power2.out" },
+                AT.tagLeft,
+              )
+                // ...then leans over into its hand-placed angle
+                .to(
+                  socialsTagRef.current,
+                  { rotation: 0, duration: 0.38, ease: "power2.out" },
+                  tiltSettleAt,
+                );
+            }
+            // 0.87s of draw, split so the arrowhead only lands at the very end
+            if (socialsArrowPathRef.current) {
+              tl.to(
+                socialsArrowPathRef.current,
+                { strokeDashoffset: 0, duration: 0.72, ease: "power1.inOut" },
+                AT.arrowLeft,
+              );
+            }
+            if (socialsArrowHeadRef.current) {
+              tl.to(
+                socialsArrowHeadRef.current,
+                { strokeDashoffset: 0, duration: 0.15, ease: "power1.out" },
+                AT.arrowLeft + 0.72,
+              );
+            }
+            if (asideTagRef.current) {
+              tl.to(
+                asideTagRef.current,
+                { autoAlpha: 1, y: 0, duration: 0.17, ease: "power2.out" },
+                AT.noteRight,
+              );
+            }
+            // longest tween in the piece — deliberately unhurried
+            if (asideScribblePathRef.current) {
+              tl.to(
+                asideScribblePathRef.current,
+                { strokeDashoffset: 0, duration: 1.1, ease: "power1.inOut" },
+                AT.squiggle,
+              );
+            }
+          }
+
+          introRef.current = tl;
+          if (revealedRef.current) tl.play();
 
           return () => {
             introRef.current = null;
@@ -417,6 +781,19 @@ export function Hero() {
   useEffect(() => {
     revealedRef.current = revealed;
     if (!revealed) return;
+
+    // Displace line 2 before the timeline starts, so "Motion" and its arrow
+    // arrive centred. This has to happen here rather than when the timeline is
+    // built: the shift is measured from the rendered line, and at build time
+    // the headline's fonts may not have loaded yet. Skipped under reduced
+    // motion, where the timeline never runs to walk it back.
+    if (
+      line2Ref.current &&
+      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      gsap.set(line2Ref.current, { x: motionLeadShift() });
+    }
+
     introRef.current?.play();
 
     // Below lg the "Abhay" tag is hidden (see its `hidden lg:block` className),
@@ -428,13 +805,15 @@ export function Hero() {
     const trackEl = designTrackRef.current;
     if (!abhayEl || !designEl || !trackEl) return;
 
-    // Set arrow direction pointing left towards targets (Math.PI / 180deg)
-    setAbhayAngle(Math.PI);
+    // §9 — reduced motion gets the rest state, no journey. `designSelected`
+    // covers the selection frame; the tag just needs to be parked and visible.
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      gsap.set(abhayEl, { x: 0, y: 0, opacity: 1 });
+      return;
+    }
 
-    // Start with minimum weight at slider bottom
-    setDesignWeight(DESIGN_WEIGHT_MIN);
-
-    // Measure exact bounding rectangles & sizes in screen space
+    // Measure exact bounding rectangles & sizes in screen space. The slider is
+    // only faded out at this point, not unmounted, so it already has a real box.
     const abhayRect = abhayEl.getBoundingClientRect();
     const designRect = designEl.getBoundingClientRect();
     const trackRect = trackEl.getBoundingClientRect();
@@ -445,9 +824,10 @@ export function Hero() {
     const abhayCenterY = abhayRect.top + abhayRect.height / 2;
 
     // Arrow tip offset from arrow box center in screen space:
-    // In 44x40 viewBox, arrow tip is at X=6, center at X=22, so offset is (16/44) * width.
+    // In 44x40 viewBox, arrow path tip is at X=40 with strokeWidth=4 round join extending to X=42.5, center at X=22.
+    // So tip offset from arrow center is (18.5 / 44) * width.
     const arrowWidth = arrowRect ? arrowRect.width : 32;
-    const arrowTipScreenLen = (16 / 44) * arrowWidth;
+    const arrowTipScreenLen = (18.5 / 44) * arrowWidth;
 
     // Calculate exact arrow boundary offset from tag center in screen space when pointing left (Math.PI)
     const arrowBoundaryScreen = stadiumBoundaryPoint(
@@ -461,214 +841,154 @@ export function Hero() {
     const screenTipX = abhayCenterX + arrowBoundaryScreen.x - arrowTipScreenLen;
     const screenTipY = abhayCenterY + arrowBoundaryScreen.y;
 
-    // 1. Point arrow tip EXACTLY at the word "Design"
-    const designTargetPointX = designRect.right;
-    const designTargetPointY = designRect.top + designRect.height / 2;
+    // 1. Point the arrow tip EXACTLY at the word "Design" — where it clicks.
+    const designTargetX = designRect.right - screenTipX;
+    const designTargetY = designRect.top + designRect.height / 2 - screenTipY;
 
-    const designTargetX = designTargetPointX - screenTipX;
-    const designTargetY = designTargetPointY - screenTipY;
+    // 2. Point the arrow tip EXACTLY at the slider handle, parked at the bottom
+    //    of its track (weight = DESIGN_WEIGHT_MIN), then at the handle's resting
+    //    height (weight = DESIGN_WEIGHT_DEFAULT) — the top of the drag.
+    const sliderBottomX = trackRect.left + trackRect.width / 2 - screenTipX;
+    const sliderBottomY = trackRect.bottom - screenTipY;
 
-    const startX = Math.max(400, window.innerWidth - abhayRect.left + 120);
-
-    // 2. Point arrow tip EXACTLY at the vertical slider controller knob
-    const trackCenterX = trackRect.left + trackRect.width / 2;
-    const sliderBottomPointY = trackRect.bottom - 4;
-
-    const sliderBottomX = trackCenterX - screenTipX;
-    const sliderBottomY = sliderBottomPointY - screenTipY;
-
-    const DEFAULT_WEIGHT = 400;
     const defaultRatio =
-      (DEFAULT_WEIGHT - DESIGN_WEIGHT_MIN) /
+      (DESIGN_WEIGHT_DEFAULT - DESIGN_WEIGHT_MIN) /
       (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN);
-    const sliderDefaultPointY =
-      trackRect.bottom - defaultRatio * trackRect.height;
-    const sliderDefaultY = sliderDefaultPointY - screenTipY;
+    const sliderDefaultY =
+      trackRect.bottom - defaultRatio * trackRect.height - screenTipY;
 
-    const tl = gsap.timeline({ delay: 0.25 });
+    // The weight is read back off the drag tween's own y rather than from a
+    // screen coordinate. Both endpoints above are *relative* offsets between
+    // two elements that sit inside the h1, so they survive the headline's
+    // re-centring drift; an absolute screen comparison would not, since the
+    // rects here are measured while the block is still pushed down by it.
+    const dragSpan = sliderDefaultY - sliderBottomY;
+    // Each push re-renders the whole hero, and the drag overlaps the left
+    // arrow's stroke draw — so skip the frames where the rounded weight has not
+    // actually moved. The ease is slowest at both ends of the drag, which is
+    // exactly where those duplicate frames bunch up.
+    let lastWeight = -1;
+    const pushWeightAtCurrentY = () => {
+      const y = gsap.getProperty(abhayEl, "y") as number;
+      const t = dragSpan === 0 ? 1 : (y - sliderBottomY) / dragSpan;
+      const clamped = Math.min(1, Math.max(0, t));
+      const weight = Math.round(
+        DESIGN_WEIGHT_MIN +
+          clamped * (DESIGN_WEIGHT_DEFAULT - DESIGN_WEIGHT_MIN),
+      );
+      if (weight === lastWeight) return;
+      lastWeight = weight;
+      setDesignWeight(weight);
+    };
 
-    // Curved fly-in: x decelerates while y (starting low) accelerates,
-    // bowing the path so the tag swoops up onto "Design" instead of
-    // travelling in a straight line.
-    tl.set(abhayEl, { x: startX, y: designTargetY + 140, opacity: 0, scale: 1 })
-      .to(abhayEl, { opacity: 1, duration: 0.45, ease: "power1.out" })
+    // §5a — enters by crossing the right edge of the viewport, well below where
+    // it lands, then glides up and to the left, strongly decelerating: nearly
+    // all of the travel happens in the first 0.35s of the 0.85s tween.
+    //
+    // It parks fully outside the right edge and is left at full opacity the
+    // whole time — the section clips it, so it wipes into view as it travels.
+    // Fading or switching it on at the edge instead makes it "appear" at a
+    // fixed spot, which is precisely the popping the rest of this fixes.
+    const headFont = parseFloat(getComputedStyle(designEl).fontSize) || 62;
+    const startX = window.innerWidth - abhayRect.left + 8;
+    const startY = designTargetY + headFont * CURSOR_ENTRY_RISE_EM;
+
+    const tl = gsap.timeline();
+
+    // The arrow points straight left (◄) for the entire journey — it is the
+    // thing doing the clicking and dragging, so it stays aimed at whatever it
+    // is working on, and only swings round once the tag has parked.
+    // `abhayAngleRef` must move with it or that final sweep starts from a stale
+    // angle and takes the long way round. Both this and the weight reset happen
+    // up front, while the tag is still off-screen and "Design" is still hidden,
+    // so neither React render lands on a frame that is animating.
+    tl.set(abhayEl, { x: startX, y: startY, opacity: 1, scale: 1 }, 0)
+      .call(
+        () => {
+          setAbhayAngle(Math.PI);
+          abhayAngleRef.current = Math.PI;
+          // park the handle at the foot of its track so the drag has somewhere
+          // to travel from
+          setDesignWeight(DESIGN_WEIGHT_MIN);
+        },
+        undefined,
+        0,
+      )
+      // 1. glides in and lands on "Design"
       .to(
         abhayEl,
         {
           x: designTargetX,
-          duration: 1.2,
-          ease: "power2.out",
+          y: designTargetY,
+          duration: 0.85,
+          ease: "power3.out",
         },
-        "<",
+        AT.cursorIn,
       )
+      // 2. §5b — the click. Font swap, selection frame and slider all land on
+      //    the same frame, with no transition on any of them.
+      .call(() => setIsDesignClicked(true), undefined, AT.designSwap)
+      // 3. crosses to the slider handle the click just revealed
       .to(
         abhayEl,
         {
-          y: designTargetY,
-          duration: 1.2,
-          ease: "power2.in",
+          x: sliderBottomX,
+          y: sliderBottomY,
+          duration: CURSOR.toSliderDur,
+          ease: "power2.inOut",
         },
-        "<",
+        AT.designSwap + CURSOR.toSliderGap,
       )
+      // 4. presses it
       .to(abhayEl, {
-        scale: 0.82,
-        duration: 0.12,
+        scale: 0.9,
+        duration: CURSOR.grabDur,
         ease: "power1.in",
-        onComplete: () => {
-          setIsDesignClicked(true);
-          setDesignPulsing(true);
-          setTimeout(() => setDesignPulsing(false), 350);
-        },
       })
-      .to(abhayEl, {
-        scale: 1,
-        duration: 0.14,
-        ease: "back.out(2)",
-      })
-      .to({}, { duration: 0.25 })
-      .to(abhayEl, {
-        x: sliderBottomX,
-        y: sliderBottomY,
-        duration: 0.7,
-        ease: "power2.inOut",
-      })
-      .to(abhayEl, {
-        scale: 0.88,
-        duration: 0.1,
-      })
+      // 5. drags it up, "Design" thickening as the arrow tip rises
       .to(abhayEl, {
         y: sliderDefaultY,
-        duration: 0.9,
+        duration: CURSOR.dragDur,
         ease: "power1.inOut",
-        onUpdate: function () {
-          const currentY = gsap.getProperty(abhayEl, "y") as number;
-          const currentArrowTipY = screenTipY + currentY;
-          const ratio = 1 - (currentArrowTipY - trackRect.top) / trackRect.height;
-          const clamped = Math.min(1, Math.max(0, ratio));
-          const weight = Math.round(
-            DESIGN_WEIGHT_MIN +
-              clamped * (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN),
-          );
-          setDesignWeight(weight);
-        },
+        onUpdate: pushWeightAtCurrentY,
       })
+      // 6. releases
       .to(abhayEl, {
         scale: 1,
-        duration: 0.15,
+        duration: CURSOR.releaseDur,
         ease: "back.out(2)",
       })
-      .to({}, { duration: 0.2 })
-      .to(abhayEl, {
-        x: 0,
-        y: 0,
-        duration: 1.85,
-        ease: "power3.out",
-        // Once the tag has parked, sweep the arrow to its resting angle at
-        // its full unhurried pace (default 1200ms ease-in-out).
-        onComplete: () => {
-          startReturnToDefaultAnimation();
+      // 7. leaves for its parked spot — and only once it arrives does the arrow
+      //    sweep round to its resting angle, handing over to cursor tracking
+      .to(
+        abhayEl,
+        {
+          x: 0,
+          y: 0,
+          duration: CURSOR.parkDur,
+          ease: "power3.out",
+          onComplete: () => startReturnToDefaultAnimation(CURSOR.arrowSettleMs),
         },
-      });
+        `+=${CURSOR.parkGap}`,
+      );
 
     return () => {
       tl.kill();
     };
-  }, [revealed, startReturnToDefaultAnimation]);
+  }, [revealed, startReturnToDefaultAnimation, motionLeadShift]);
 
-  const [falling, setFalling] = useState(false);
-
-  const resetHeroElements = useCallback(() => {
+  /**
+   * Lands on the hero's bottom edge, which is the top of whatever section
+   * follows — measured rather than assumed, so it does not depend on the hero
+   * being exactly one viewport tall or on the next section's markup.
+   */
+  const scrollToNextSection = () => {
     if (!scope.current) return;
-    setFalling(false);
-
-    const wordWrappers = scope.current.querySelectorAll<HTMLElement>(
-      "h1 .overflow-hidden",
-    );
-    gsap.set(wordWrappers, { overflow: "hidden" });
-
-    const items = scope.current.querySelectorAll<HTMLElement>(
-      "[data-word], [data-hero-fade], [data-fall-item]",
-    );
-
-    gsap.killTweensOf(items);
-
-    gsap.to(items, {
-      x: 0,
-      y: 0,
-      rotation: 0,
-      opacity: 1,
-      autoAlpha: 1,
-      duration: 0.8,
-      stagger: 0.02,
-      ease: "power3.out",
-      clearProps: "transform,opacity,visibility",
-    });
-  }, []);
-
-  const handleFallAway = () => {
-    if (falling || !scope.current) return;
-    setFalling(true);
-
-    const wordWrappers = scope.current.querySelectorAll<HTMLElement>(
-      "h1 .overflow-hidden",
-    );
-    gsap.set(wordWrappers, { overflow: "visible" });
-
-    const items = scope.current.querySelectorAll<HTMLElement>(
-      "[data-word], [data-hero-fade], [data-fall-item]",
-    );
-
-    items.forEach((el) => {
-      const rect = el.getBoundingClientRect();
-      const heroRect = scope.current?.getBoundingClientRect() || {
-        width: window.innerWidth,
-        left: 0,
-      };
-      const centerX = heroRect.left + heroRect.width / 2;
-      const elCenterX = rect.left + rect.width / 2;
-
-      const offsetX = (elCenterX - centerX) / (heroRect.width / 2);
-      const horizontalDrift = offsetX * gsap.utils.random(30, 80);
-
-      // Single consistent directional tilt (e.g. 18deg to 38deg in one direction)
-      const sideSign = offsetX >= 0 ? 1 : -1;
-      const tilt = sideSign * gsap.utils.random(24, 48);
-
-      // Distance to drop down offscreen
-      const fallDistance = window.innerHeight + 250 - rect.top;
-
-      // Slow, graceful gravitational fall transition
-      gsap.set(el, { transformOrigin: "50% 50%" });
-      gsap.to(el, {
-        y: fallDistance,
-        x: horizontalDrift,
-        rotation: tilt,
-        opacity: 0,
-        duration: gsap.utils.random(2.2, 3.0),
-        delay: gsap.utils.random(0, 0.25),
-        ease: "power2.out",
-      });
-    });
-
-    // Smooth scroll down to next section while hero remains completely empty
-    gsap.delayedCall(2.6, () => {
-      window.scrollTo({
-        top: window.innerHeight * 0.92,
-        behavior: "smooth",
-      });
+    window.scrollTo({
+      top: scope.current.getBoundingClientRect().bottom + window.scrollY,
+      behavior: "smooth",
     });
   };
-
-  useEffect(() => {
-    const handleScroll = () => {
-      // Only reset hero elements back into position if user explicitly scrolls back near the top of the page
-      if (falling && window.scrollY < 40) {
-        resetHeroElements();
-      }
-    };
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, [falling, resetHeroElements]);
 
   const words = (tokens: Token[]) =>
     tokens.map((t, i) => (
@@ -677,10 +997,11 @@ export function Hero() {
         className="inline-block overflow-hidden align-top pb-[0.08em] -mb-[0.08em]"
       >
         <span
-          data-word
+          data-word={t.name}
           className={`inline-block will-change-transform ${t.className ?? ""}`}
         >
-          {t.text}&nbsp;
+          {t.text}
+          {t.tight ? null : " "}
         </span>
       </span>
     ));
@@ -696,32 +1017,75 @@ export function Hero() {
           aria-hidden
           className="absolute inset-0 bg-[url('/bg.svg')] bg-cover bg-center"
         />
-        {/* <div
-          aria-hidden
-          className="absolute -bottom-32 -left-32 h-[26rem] w-[26rem] rounded-full border-[46px] border-sage/25 blur-2xl"
-        /> */}
-        <DotGrid
-          dotSize={3}
+        {/* Slowly rotating 3D trefoil knot, lower-left — real geometry rather
+            than the flat /public/3d.svg render, so it can actually turn on its
+            axis instead of squashing edge-on. Sits above the dot grid but
+            below the headline; softened so it reads as ambient depth. */}
+        {/* Size and position are derived from the Figma "Main" frame rather
+            than eyeballed. Node 1:19093 places a 431.012x346.207 rect, rotated
+            -8.47284deg, at (-145, 460.505) in 1440x810. Inside it sits the
+            201x200 render whose ink occupies 147x158px, so the knot actually
+            draws at 315.2x273.5px with its centre — after the rotation — at
+            (78.81, 665.68). That is the 5.473% / 17.817% below.
+
+            The box is anchored by its CENTRE, not a corner. The knot renders
+            centred in the canvas with camera margin around it, so centre
+            anchoring is what makes size and position independent: change the
+            clamp and it grows in place rather than crawling toward a corner.
+            34vw puts the rendered ink at ~316x303px against the design's
+            315.2x273.5 — the width is essentially exact.
+
+            The cap is 34vw measured at 6000px, the same viewport the headline
+            and the block's max-width cap at, so all three stop growing together
+            and the knot holds its 34% share of the width the whole way up. It
+            was 50rem, which 34vw reached at 2353px — from there the knot was
+            frozen while everything around it kept scaling, down to 18% of the
+            viewport by 4400px and 13% by 6000px.
+
+            The one thing NOT reproduced is that the design scales that square
+            201x200 render into a 431x346 box, stretching it 1.2388x
+            horizontally. Matching the width therefore leaves this ~11% taller
+            than the design. Reproducing the squash would mean fighting the
+            camera's aspect to distort a knot on purpose, so the geometry is
+            left true; that difference is the whole of the height gap.
+
+            On the two properties that look like mismatches against Figma's
+            inspector: its `filter: blur(0px)` is deliberately NOT copied. That
+            means no *additional* CSS blur, but the design's edges still measure
+            a ~14px transition because its source is a 201px render upscaled
+            ~2.1x. This is real geometry and therefore pixel-sharp, so it needs
+            ~2.5px of blur to land on that same 14px edge (measured: 13px).
+            Setting 0 here would read visibly crisper than the design, not
+            closer to it. Opacity 0.15 is likewise measured, not the raw 0.13
+            fill-opacity — it matches the design's peak green delta of ~13. */}
+        <TorusKnot3D className="pointer-events-none absolute bottom-[30.817%] left-[5.473%] hidden h-[clamp(21rem,34vw,127.5rem)] w-[clamp(21rem,34vw,127.5rem)] -translate-x-1/2 translate-y-1/2 -rotate-[8.473deg] opacity-[0.15] blur-[2.5px] sm:block" />
+
+        <DotGridZoom
           gap={30}
-          baseColor="#E5E5E5"
-          activeColor="#E5E5E5"
-          proximity={110}
-          shockRadius={200}
-          shockStrength={3}
-          resistance={500}
-          returnDuration={1.2}
+          baseSize={3}
+          maxSize={18}
+          proximity={130}
+          color="#D8D8D8"
         />
       </div>
 
+      {/* The max-width cap has to reach the same viewport width as the
+          headline's font cap, or the two stop moving together. 68vw hit the old
+          187rem (2992px) at 4400px, while the type carries on to 16.875rem at
+          6000px — across that stretch the block was frozen while the words kept
+          growing, so the room fell from 15.11em to 11.08em and line 3 wrapped.
+          255rem is 68vw at 6000px, so both cap together and the ratio holds
+          from there on. Below 4400px the cap never bound, so nothing there
+          changes. Keep these two in step if either is retuned. */}
       <div
         data-hero-inner
-        className="relative mx-auto flex w-full max-w-7xl min-[1440px]:max-w-[clamp(90rem,68vw,187rem)] flex-col items-center text-center px-0 sm:px-5 2xl:px-0"
+        className="relative mx-auto flex w-full max-w-7xl min-[1440px]:max-w-[clamp(90rem,68vw,255rem)] flex-col items-center text-center px-0 sm:px-5 2xl:px-0"
       >
         {/* "for socials, apps..." tag + curved arrow, pointing into the headline */}
-        <div className="absolute top-3 hidden -rotate-9 min-[1024px]:block origin-top-left min-[1024px]:left-[calc(50%-27rem)] min-[1024px]:scale-90 min-[1280px]:left-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:left-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:left-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:left-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:left-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:left-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:left-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:left-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:left-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:left-[calc(50%-108rem)] min-[4400px]:scale-295">
+        <div className="absolute top-3 hidden -rotate-9 min-[1024px]:block origin-top-left min-[1024px]:left-[calc(50%-27rem)] min-[1024px]:scale-90 min-[1280px]:left-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:left-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:left-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:left-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:left-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:left-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:left-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:left-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:left-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:left-[calc(50%-108rem)] min-[4400px]:scale-295 min-[5120px]:left-[calc(50%-126rem)] min-[5120px]:scale-345 min-[6000px]:left-[calc(50%-147rem)] min-[6000px]:scale-400">
           <span
             ref={socialsTagRef}
-            className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs font-medium text-[#4F6156]"
+            className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs text-[#4F6156]"
           >
             For Socials, Apps, Websites &amp; Products
           </span>
@@ -730,7 +1094,7 @@ export function Hero() {
             viewBox="0 0 70 48"
             fill="none"
             aria-hidden
-            className="ml-24 mt-1 w-20 text-ink/60"
+            className="ml-24 mt-1 w-20 text-ink"
           >
             <path
               ref={socialsArrowPathRef}
@@ -739,7 +1103,7 @@ export function Hero() {
               strokeWidth="1.5"
               strokeLinecap="round"
             />
-            <g transform="translate(54.624, 28.868)">
+            <g transform="translate(56.624, 28.868)">
               <path
                 ref={socialsArrowHeadRef}
                 d="M2.87622 0.257233C4.37622 2.75723 9.87622 9.75723 13.3762 10.7572C14.8762 11.1858 3.87622 13.7572 0.376221 17.7572"
@@ -752,52 +1116,88 @@ export function Hero() {
           </svg>
         </div>
 
-        {/* hand-written aside, top right */}
+        {/* hand-written aside, top right.
+
+            Below 2800 is derived from the 2800 step rather than eyeballed:
+            solving that pair against the headline's font size gives
+            right = 8.254 x font and top = -0.635 x font, and every width under
+            it is those two constants re-evaluated at its own clamp()ed font
+            size. 2800 and up are left exactly as set. The font is flat at 56px
+            below 1244px (the clamp's floor), which is why 1024 and 1280 barely
+            differ — and why 1280 needs no `top` of its own. */}
         <div
           ref={asideTagRef}
-          className="absolute -top-10 hidden rotate-10 text-right min-[1024px]:block origin-top-right min-[1024px]:right-[calc(50%-32rem)] min-[1024px]:scale-90 min-[1280px]:right-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:right-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:right-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:right-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:right-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:right-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:right-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:right-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:right-[calc(50%-108rem)] min-[4400px]:scale-295 w-36 min-[1280px]:w-42 min-[1440px]:w-42 min-[1600px]:w-44 min-[1920px]:w-44 min-[2400px]:w-48 min-[2800px]:w-60 min-[3300px]:w-64 min-[3840px]:w-72 min-[4400px]:w-76"
+          className="absolute hidden text-right min-[1024px]:block min-[1024px]:right-[calc(50%-29rem)] min-[1024px]:-top-0 min-[1280px]:right-[calc(50%-30rem)] min-[1440px]:right-[calc(50%-33rem)] min-[1440px]:-top-10 min-[1600px]:right-[calc(50%-37rem)] min-[1600px]:-top-11 min-[1920px]:right-[calc(50%-42rem)] min-[1920px]:-top-14 min-[2120px]:right-[calc(50%-49rem)] min-[2120px]:-top-15 min-[2400px]:right-[calc(50%-56rem)] min-[2400px]:-top-17 min-[2800px]:right-[calc(50%-65rem)] min-[2800px]:-top-20 min-[3300px]:right-[calc(50%-80rem)] min-[3300px]:-top-27 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:-top-30 min-[4400px]:right-[calc(50%-98rem)] min-[4400px]:-top-38 min-[5120px]:right-[calc(50%-100rem)] min-[5120px]:-top-40 min-[6000px]:right-[calc(50%-130rem)] min-[6000px]:-top-45"
         >
-          <p className="font-hand text-sm sm:text-base leading-snug text-ink/90">
-            We give every project the love and affection it deserves :)
-          </p>
-          <svg
-            viewBox="0 0 113 83"
-            fill="none"
-            aria-hidden
-            className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-ink/80"
-          >
-            <path
-              ref={asideScribblePathRef}
-              opacity="0.7"
-              d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
-              stroke="currentColor"
-              strokeWidth="1"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <div className="rotate-10 origin-top-right min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[1920px]:scale-135 min-[2120px]:scale-140 min-[2400px]:scale-170 min-[2800px]:scale-195 min-[3300px]:scale-230 min-[3840px]:scale-260 min-[4400px]:scale-295 min-[5120px]:scale-345 min-[6000px]:scale-400 w-48 min-[1280px]:w-48 min-[1440px]:w-46 min-[1600px]:w-46 min-[1920px]:w-46 min-[2400px]:w-46 min-[2800px]:w-46 min-[3300px]:w-46 min-[3840px]:w-46 min-[4400px]:w-46">
+            <p className="font-kalam text-xs sm:text-sm min-[1280px]:text-base leading-snug text-ink/90 [text-wrap:balance]">
+              We give every project the love <br />
+              and affection it deserves :)
+            </p>
+            <svg
+              viewBox="0 0 113 83"
+              fill="none"
+              aria-hidden
+              className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-ink/80"
+            >
+              <path
+                ref={asideScribblePathRef}
+                opacity="0.7"
+                d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
+                stroke="currentColor"
+                strokeWidth="1"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
         </div>
 
         {/* mobile/tablet stand-in for the lg-only floating tag — keeps content parity below lg */}
         <span
           data-hero-fade
+          data-intro-fade
           className="mt-16 mb-5 inline-block -rotate-2 rounded-full bg-[#F5F5F5] px-3.5 py-1.5 text-[11px] font-medium text-[#4F6156] sm:text-xs lg:hidden"
         >
           For Socials, Apps, Websites &amp; Products
         </span>
 
-        <h1 className="mt-3 font-heading font-black leading-[1.05] tracking-normal [word-spacing:0.22em] text-ink lg:mt-16 text-[clamp(1.5rem,7vw,2.5rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,4.5vw,12.4rem)]">
+        {/* Figma "Main": 65px leading on 63.549px type, and the words that are
+            not the deep green are plain black rather than `--ink`.
+
+            The lg cap carries the size past 4400px. At 12.4rem (198.4px) the
+            fluid 4.5vw stopped at a 4409px viewport, so the headline froze
+            exactly where the rest of the layout keeps stepping up. 16.875rem
+            (270px) is 4.5vw at 6000px, which carries it through the next two
+            widths above 4400 — 5120 and 6000 — and only the cap moves, so every
+            width below 4409px renders identically to before.
+
+            Deliberately one clamp rather than `min-[5120px]:text-*` steps:
+            arbitrary min-[] variants are emitted ahead of the named ones, so on
+            font-size they lose to the `lg:` rule that is still matching, and the
+            step would silently do nothing. Other properties here can use min-[]
+            freely because nothing named competes for them. */}
+        <h1 className="mt-3 font-heading font-normal leading-[1.023] tracking-normal [word-spacing:0.22em] text-black lg:mt-16 text-[clamp(1.5rem,7vw,2.5rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,4.5vw,16.875rem)]">
           <span className="block">
             {words([
-              { text: "Retention", className: "font-[750]" },
-              { text: "Driven", className: "font-normal" },
+              {
+                text: "Retention",
+                name: "retention",
+                className: `font-extrabold ${HEADLINE_GREEN}`,
+              },
+              { text: "Driven", name: "driven", className: "font-medium" },
             ])}
           </span>
 
-          <span className="relative block">
-            <span className="group/cta relative inline-flex items-center">
-              <span className="inline-block transition-transform duration-700 ease-out group-has-[a:hover]/cta:-translate-x-[2.42em]">
-                {words([{ text: "Motion", className: "font-normal" }])}
+          <span ref={line2Ref} className="relative block">
+            <span
+              ref={motionGroupRef}
+              className="group/cta relative inline-flex items-center"
+            >
+              <span className="inline-block transition-transform duration-700 ease-out group-has-[a:hover]/cta:-translate-x-[2.1em]">
+                {words([
+                  { text: "Motion", name: "motion", className: "font-normal" },
+                ])}
               </span>
               <motion.a
                 ref={ctaArrowRef}
@@ -809,14 +1209,14 @@ export function Hero() {
                     affects the surrounding text flow (guarantees "& Design" never moves) */}
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-black/80 pr-[0.74em] transition-[width] duration-700 ease-out group-hover/arrow:w-[3.2em]"
+                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-[#0F2100] border border-[#022C12] pr-[0.74em] transition-[width] duration-700 ease-out group-hover/arrow:w-[3.1em]"
                 >
                   <span className="mr-3 translate-x-0 whitespace-nowrap text-[0.4em] font-semibold [word-spacing:normal] text-cream opacity-0 transition-all duration-700 ease-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
                     Book a call
                   </span>
                 </span>
 
-                <span className="relative z-10 inline-flex size-[0.6em] shrink-0 items-center justify-center rounded-full bg-coral shadow-[0_10px_24px_-6px_rgba(232,115,74,0.6)]">
+                <span className="relative z-10 inline-flex size-[0.6em] shrink-0 items-center justify-center rounded-full bg-[#EF7C58] shadow-[0_10px_24px_-6px_rgba(232,115,74,0.6)]">
                   <svg
                     viewBox="0 0 24 24"
                     fill="none"
@@ -833,50 +1233,83 @@ export function Hero() {
                 </span>
               </motion.a>
             </span>
-            {words([{ text: "&", className: "font-sans font-normal" }])}
+            {/* the only word not set in Archivo — Figma has it in Inter Light */}
+            {words([
+              { text: "&", name: "amp", className: "font-sans font-light" },
+            ])}
             <span
               data-fall-item
               className="relative mx-1 inline-block overflow-visible align-top"
             >
-              <span className="inline-block overflow-hidden pb-[0.08em] -mb-[0.08em] align-top">
+              {/* The box is sized by a ghost pinned to the resting weight, and
+                  the real word is taken out of flow on top of it. Dragging the
+                  slider then changes only how "Design" is drawn, never how much
+                  room it claims — heavier weights spill over this box instead of
+                  re-flowing the whole line, and the selection frame and slider
+                  rail (both positioned against this box) stay put too.
+
+                  The ghost tracks `designFontFamily` but not `designWeight`:
+                  the box should still follow the one-off swap out of the script
+                  face, just not the live weight drag.
+
+                  Nothing clips here on purpose — the old `overflow-hidden` mask
+                  would have cut the overspill off rather than letting it show. */}
+              <span className="relative inline-block pb-[0.08em] -mb-[0.08em] align-top">
                 <span
-                  ref={designWordRef}
-                  data-word
-                  className={`inline-block will-change-transform transition-all duration-300 ${
-                    designPulsing ? "scale-105" : ""
-                  }`}
+                  aria-hidden
+                  className="invisible"
                   style={{
-                    fontWeight: designWeight,
-                    fontFamily:
-                      isDesignClicked || isDesktopView === false
-                        ? "inherit"
-                        : "'Ink Free', var(--font-hand), var(--font-kalam), cursive",
+                    fontWeight: DESIGN_WEIGHT_DEFAULT,
+                    fontFamily: designFontFamily,
                   }}
                 >
                   Design
                 </span>
+                {/* The centring sits on this wrapper, which GSAP never touches,
+                    for the same reason the "Abhay" tag keeps its responsive
+                    scale on an inner span: when GSAP animates the word's `y` it
+                    folds any standalone CSS `translate` into its own transform
+                    and leaves `translate: none` behind. That resolves the -50%
+                    against the word's width at that instant and freezes it as
+                    pixels — so once the headline's clamp() changed the font
+                    size, the word drifted left on narrow screens and right on
+                    wide ones. Kept apart, the percentage stays a percentage. */}
+                <span className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap">
+                  <span
+                    ref={designWordRef}
+                    data-word="design"
+                    className="inline-block will-change-transform transition-[font-weight] duration-300"
+                    style={{
+                      fontWeight: designWeight,
+                      fontFamily: designFontFamily,
+                    }}
+                  >
+                    Design
+                  </span>
+                </span>
               </span>
 
-              {/* dotted selection border */}
+              {/* dotted selection border — snaps in on the same frame as the
+                  font swap, with no crossfade (spec §5b) */}
               <span
                 aria-hidden
-                className={`pointer-events-none absolute -inset-1 border border-dashed border-ink/50 transition-opacity duration-300 ${
-                  isDesignClicked ? "opacity-100" : "opacity-0"
+                className={`pointer-events-none absolute -inset-1 min-[1024px]:-inset-[0.05em] border border-dashed border-ink/50 ${
+                  designSelected ? "opacity-100" : "opacity-0"
                 }`}
               />
 
               {/* 4 corner dots marking the selection — centered exactly on the dashed box's corners */}
               {[
-                "-top-1 -left-1 -translate-x-1/2 -translate-y-1/2",
-                "-top-1 -right-1 translate-x-1/2 -translate-y-1/2",
-                "-bottom-1 -left-1 -translate-x-1/2 translate-y-1/2",
-                "-bottom-1 -right-1 translate-x-1/2 translate-y-1/2",
+                "-top-1 -left-1 min-[1024px]:-top-[0.05em] min-[1024px]:-left-[0.05em] -translate-x-1/2 -translate-y-1/2",
+                "-top-1 -right-1 min-[1024px]:-top-[0.05em] min-[1024px]:-right-[0.05em] translate-x-1/2 -translate-y-1/2",
+                "-bottom-1 -left-1 min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.05em] -translate-x-1/2 translate-y-1/2",
+                "-bottom-1 -right-1 min-[1024px]:-bottom-[0.05em] min-[1024px]:-right-[0.05em] translate-x-1/2 translate-y-1/2",
               ].map((pos) => (
                 <span
                   key={pos}
                   aria-hidden
-                  className={`pointer-events-none absolute ${pos} size-1.5 rounded-full bg-black transition-opacity duration-300 ${
-                    isDesignClicked ? "opacity-100" : "opacity-0"
+                  className={`pointer-events-none absolute ${pos} size-1.5 min-[1024px]:size-[0.075em] min-[1024px]:min-w-[6px] min-[1024px]:min-h-[6px] rounded-full bg-black ${
+                    designSelected ? "opacity-100" : "opacity-0"
                   }`}
                 />
               ))}
@@ -885,27 +1318,37 @@ export function Hero() {
               <span
                 ref={designTrackRef}
                 onPointerDown={(e) => {
-                  if (!isDesignClicked) return;
+                  if (!designSelected) return;
                   e.currentTarget.setPointerCapture(e.pointerId);
                   updateDesignWeightFromPointer(e.clientY);
                 }}
                 onPointerMove={(e) => {
-                  if (!isDesignClicked) return;
+                  if (!designSelected) return;
                   if (e.buttons === 1) updateDesignWeightFromPointer(e.clientY);
                 }}
-                className={`absolute -right-9 -top-2 -bottom-2 flex w-4 items-center justify-center transition-opacity duration-300 ${
-                  isDesignClicked
+                // Top/bottom deliberately mirror the dashed selection box's
+                // `-inset-1` / `-inset-[0.05em]` above, so the rail is exactly
+                // as tall as the box it belongs to. The box itself stays wide —
+                // a 1px rail is far too thin to grab, so this keeps a ~20px
+                // pointer target with the line centred inside it.
+                className={`absolute -right-9 min-[1024px]:left-[calc(100%+0.32em)] -top-1 min-[1024px]:-top-[0.05em] -bottom-1 min-[1024px]:-bottom-[0.05em] flex w-5 min-[1024px]:w-[0.3em] min-[1024px]:min-w-[20px] items-center justify-center ${
+                  designSelected
                     ? "opacity-100 pointer-events-auto cursor-pointer"
                     : "opacity-0 pointer-events-none"
                 }`}
               >
+                {/* A hairline, matching the design's plain 1px rule. Held at
+                    1px rather than scaled in em so it stays a line at every
+                    breakpoint — the same reason the dashed box beside it uses a
+                    1px border. Solid `ink/50` to match that border too; the old
+                    sand-to-ink gradient was invisible at this width. */}
+                <span aria-hidden className="h-full w-[3px] bg-ink/50" />
                 <span
                   aria-hidden
-                  className="h-full w-1 rounded-full bg-[linear-gradient(to_top,#d9caa5,#26311c)]"
-                />
-                <span
-                  aria-hidden
-                  className="absolute left-1/2 h-2.5 w-5 rounded-sm border border-black bg-white opacity-100"
+                  // Sized down to suit the hairline rail — roughly the design's
+                  // 15 x 6.667px handle rather than the old 24 x 12px, which
+                  // dwarfed a 1px line.
+                  className="absolute left-1/2 h-1.5 w-3.5 min-[1024px]:h-[0.105em] min-[1024px]:w-[0.236em] min-[1024px]:min-h-[7px] min-[1024px]:min-w-[15px] rounded-md min-[1024px]:rounded-[0.1em] border border-black bg-white opacity-100 shadow-sm"
                   style={{
                     top: `${
                       100 -
@@ -923,60 +1366,105 @@ export function Hero() {
             <span
               ref={abhayRef}
               data-fall-item
-              className="absolute top-1/2 hidden -translate-y-1/2 min-[1024px]:block opacity-0 origin-left left-[calc(100%+1rem)] min-[1280px]:left-[calc(100%+1.5rem)] min-[1440px]:left-[calc(100%+2rem)] min-[1600px]:left-[calc(100%+2.5rem)] min-[2120px]:left-[calc(100%+2.75rem)] min-[2400px]:left-[calc(100%+3.1rem)] min-[2800px]:left-[calc(100%+3.6rem)] min-[3300px]:left-[calc(100%+4.3rem)] min-[3840px]:left-[calc(100%+4.9rem)] min-[4400px]:left-[calc(100%+5.6rem)] transition-all"
+              className="absolute top-1/2 hidden -translate-y-1/2 min-[1024px]:block opacity-0 origin-left left-[calc(100%+1rem)] min-[1280px]:left-[calc(100%+1.5rem)] min-[1440px]:left-[calc(100%+2rem)] min-[1600px]:left-[calc(100%+2.5rem)] min-[2120px]:left-[calc(100%+2.75rem)] min-[2400px]:left-[calc(100%+3.1rem)] min-[2800px]:left-[calc(100%+3.6rem)] min-[3300px]:left-[calc(100%+4.3rem)] min-[3840px]:left-[calc(100%+4.9rem)] min-[4400px]:left-[calc(100%+5.6rem)] min-[5120px]:left-[calc(100%+6.5rem)] min-[6000px]:left-[calc(100%+7.6rem)]"
             >
               {/* GSAP folds the CSS `scale` property into its own transform on the
                   wrapper above (leaving `scale: none` inline), so the responsive
                   scale steps must live on this inner span it never animates. */}
-              <span className="block origin-left min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[2120px]:scale-140 min-[2400px]:scale-155 min-[2800px]:scale-180 min-[3300px]:scale-215 min-[3840px]:scale-245 min-[4400px]:scale-280">
-              <span
-                aria-hidden
-                data-abhay-arrow
-                style={{
-                  transform: `translate(-50%, -50%) translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
-                }}
-                className={`pointer-events-none absolute left-1/2 top-1/2 size-7.5 min-[1280px]:size-8 min-[1600px]:size-8.5 min-[1920px]:size-9 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform ease-out ${
-                  isAbhayTracking ? "duration-150" : "duration-75"
-                }`}
-              >
-                <svg viewBox="0 0 44 40" className="size-full overflow-visible">
-                  <path
-                    d="M40 20 L6 4 L14 20 L6 36 Z"
-                    fill="currentColor"
-                    stroke="#FFFFFF"
-                    strokeWidth="4"
-                    strokeLinejoin="round"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </span>
+              <span className="block origin-left min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[2120px]:scale-140 min-[2400px]:scale-155 min-[2800px]:scale-180 min-[3300px]:scale-215 min-[3840px]:scale-245 min-[4400px]:scale-280 min-[5120px]:scale-325 min-[6000px]:scale-380">
+                <span
+                  aria-hidden
+                  data-abhay-arrow
+                  style={{
+                    transform: `translate(-50%, -50%) translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
+                  }}
+                  className={`pointer-events-none absolute left-1/2 top-1/2 size-7.5 min-[1280px]:size-8 min-[1600px]:size-8.5 min-[1920px]:size-9 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)] transition-transform ease-out ${
+                    isAbhayTracking ? "duration-150" : "duration-75"
+                  }`}
+                >
+                  <svg
+                    viewBox="0 0 44 40"
+                    className="size-full overflow-visible"
+                  >
+                    <path
+                      d="M40 20 L6 4 L14 20 L6 36 Z"
+                      fill="currentColor"
+                      stroke="#FFFFFF"
+                      strokeWidth="4"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </span>
 
-              <span className="relative flex items-center rounded-full bg-[#1e7a00] px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
-                Abhay
-              </span>
+                <span className="relative flex items-center rounded-full bg-[#1e7a00] px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
+                  Abhay
+                </span>
               </span>
             </span>
           </span>
 
           <span className="block">
             {words([
-              { text: "for", className: "font-normal" },
-              { text: "Results", className: "font-[750]" },
+              { text: "for", name: "for", className: "font-light" },
+              {
+                text: "Results",
+                name: "results",
+                className: `font-extrabold ${HEADLINE_GREEN}`,
+                // the badge slot follows immediately, so this word must not
+                // also contribute a space
+                tight: true,
+              },
             ])}
-            <span
+            {/* `align-middle` lines the box's centre up with baseline + half the
+                x-height, but the words either side read as centred on their
+                CAPS — and for Archivo the cap centre sits 0.101em higher than
+                that. Hence the lift; the old code nudged 0.1em the other way,
+                which put the pair 0.2em low.
+                The height stays under the 1.023 leading on purpose: the badges
+                are absolutely positioned, so they can overflow it visually
+                without the line box growing and forcing the lines apart. */}
+            {/* The width animates rather than being reserved. While the pair is
+                stacked the slot is only as wide as one badge, so there is no
+                dead space flanking it; it then widens in step with the fan, and
+                because the headline lines are centred that pushes "for Results"
+                left and "Oriented" right in real time. This is a genuine layout
+                animation — reflowing the line is the whole point of it. */}
+            <motion.span
               data-fall-item
-              className="relative mx-[0.12em] inline-block h-[0.95em] w-[1.5em] translate-y-[0.1em] align-middle"
+              className="relative inline-block h-[0.95em] -translate-y-[0.101em] align-middle"
+              initial={{ width: `${BADGE.tile * BADGE.slotCollapsed}em` }}
+              animate={
+                revealed ? { width: `${BADGE.tile * BADGE.slot}em` } : {}
+              }
+              transition={{ width: badgeFan }}
             >
-              {/* Instagram-style badge — left, tilted left, tucked behind */}
+              {/* Instagram badge — left, tucked behind LinkedIn. §5c: emerges
+                  from *behind* it, sliding left out of the stack and tilting as
+                  it goes. `x` is a share of its own tile width, so the travel
+                  scales with the headline type scale.
+
+                  The tilt is animated 0 -> -11.04 and the inner wrapper below
+                  cancels the angle baked into the artwork. It cannot go on this
+                  element's `style` instead: Framer Motion claims `rotate` as one
+                  of its own transform values, so a `style.rotate` here is
+                  swallowed and then overridden by the animated one — which left
+                  only the inner cancellation and rendered the badge flat. */}
               <motion.span
                 aria-hidden
-                initial={{ opacity: 0, scale: 0.4, rotate: -22 }}
+                initial={{
+                  opacity: 0,
+                  scale: 0.6,
+                  rotate: 0,
+                  x: "0%",
+                }}
                 animate={
                   revealed
                     ? {
                         opacity: 1,
                         scale: 1,
-                        rotate: -12,
+                        rotate: BADGE.instagramTilt,
+                        x: BADGE.instagramRest,
                         y:
                           hoveredBadge === "instagram"
                             ? -8
@@ -988,31 +1476,70 @@ export function Hero() {
                     : {}
                 }
                 transition={{
-                  duration: 0.5,
-                  delay: 0.9,
-                  ease: "backOut",
-                  y: { duration: 0.3, ease: "easeOut" },
+                  opacity: badgeFan,
+                  scale: badgeFan,
+                  rotate: badgeFan,
+                  x: badgeFan,
+                  y: badgeHover,
+                  zIndex: { duration: 0 },
                 }}
                 onMouseEnter={() => setHoveredBadge("instagram")}
                 onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute left-0 top-[0.4em] z-10 flex size-[0.58em] translate-y-[-40%] cursor-pointer items-center justify-center rounded-sm ring-1 ring-black ring-offset-[0.1em] ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                className="absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
                 style={{
-                  background:
-                    "linear-gradient(135deg, #f9ce34, #ee2a7b, #6228d7)",
+                  width: `${BADGE.tile}em`,
+                  height: `${BADGE.tile}em`,
                 }}
               >
-                <FaInstagram className="size-[0.52em] text-white" />
+                {/* Cancels the angle baked into the artwork, so the visible tile
+                    ends up at whatever the animated rotation above says. That is
+                    what lets this span — the sole hover target — carry the tile's
+                    real angle, instead of the two disagreeing at the corners.
+                    A plain span, so its `rotate` is the CSS property and Framer
+                    Motion never sees it. */}
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{ rotate: `${-BADGE.instagramTilt}deg` }}
+                >
+                  {/* placed by the tile's centre within the canvas rather than
+                      the image's own — the canvas is oversized for shadow bleed,
+                      which sits the tile above centre */}
+                  {/* Static export with `images.unoptimized`, and these are
+                      inline SVG icons — next/image would optimize nothing here. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/instagram.svg"
+                    alt=""
+                    className="absolute max-w-none"
+                    style={{
+                      width: `${BADGE.tile * BADGE.instagramImgScale}em`,
+                      left: "55%",
+                      top: "50%",
+                      transform: `translate(-${BADGE.instagramTileCentreX}, -${BADGE.instagramTileCentreY})`,
+                    }}
+                  />
+                </span>
               </motion.span>
-              {/* LinkedIn-style badge — right, tilted right, layered on top */}
+              {/* LinkedIn badge — right, layered on top. §4c #10: a fast 0.11s
+                  scale snap, noticeably quicker than the orange arrow pill. It
+                  lands flat and centred between the two resting spots, then
+                  slides right into its +18.26deg tilt as the pair fans apart. */}
               <motion.span
                 aria-hidden
-                initial={{ opacity: 0, scale: 0.4, rotate: 22 }}
+                initial={{
+                  opacity: 0,
+                  scale: 0,
+                  rotate: 0,
+                  x: "0%",
+                }}
                 animate={
                   revealed
                     ? {
                         opacity: 1,
                         scale: 1,
-                        rotate: 12,
+                        rotate: BADGE.linkedinTilt,
+                        x: BADGE.linkedinRest,
                         y:
                           hoveredBadge === "linkedin"
                             ? -8
@@ -1024,26 +1551,57 @@ export function Hero() {
                     : {}
                 }
                 transition={{
-                  duration: 0.5,
-                  delay: 1,
-                  ease: "backOut",
-                  y: { duration: 0.3, ease: "easeOut" },
+                  // appears alone, untilted, at the centre of the slot...
+                  opacity: badgeSnap,
+                  scale: badgeSnap,
+                  // ...then slides right and tilts as the pair fans apart
+                  rotate: badgeFan,
+                  x: badgeFan,
+                  y: badgeHover,
+                  zIndex: { duration: 0 },
                 }}
                 onMouseEnter={() => setHoveredBadge("linkedin")}
                 onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute right-[0.35em] top-1/2 z-20 flex size-[0.58em] translate-y-[-55%] cursor-pointer items-center justify-center rounded-sm bg-[#0a66c2] ring-1 ring-black ring-offset-[0.1em] ring-offset-white shadow-[0_10px_20px_-6px_rgba(38,49,28,0.4)]"
+                className="absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
+                style={{
+                  width: `${BADGE.tile}em`,
+                  height: `${BADGE.tile}em`,
+                }}
               >
-                <FaLinkedinIn className="size-[0.46em] text-white" />
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{ rotate: `${-BADGE.linkedinTilt}deg` }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src="/Linkedin-svg.svg"
+                    alt=""
+                    className="absolute max-w-none"
+                    style={{
+                      width: `${BADGE.tile * BADGE.linkedinImgScale}em`,
+                      left: "42%",
+                      top: "50%",
+                      transform: `translate(-${BADGE.linkedinTileCentreX}, -${BADGE.linkedinTileCentreY})`,
+                    }}
+                  />
+                </span>
               </motion.span>
-            </span>
-            {words([{ text: "Oriented", className: "font-[500]" }])}
+            </motion.span>
+            {words([
+              { text: "Oriented", name: "oriented", className: "font-[500]" },
+            ])}
           </span>
 
           <span className="ml-[0.02em] inline-block align-top">
             <span className="relative inline-block overflow-visible">
               <span>
                 {words([
-                  { text: "Founders", className: "italic font-semibold" },
+                  {
+                    text: "Founders",
+                    name: "founders",
+                    className: `italic font-semibold ${HEADLINE_GREEN}`,
+                  },
                 ])}
               </span>
               <svg
@@ -1074,7 +1632,11 @@ export function Hero() {
             </span>
             <span>
               {words([
-                { text: ".", className: "text-coral" },
+                {
+                  text: ".",
+                  name: "period",
+                  className: `font-extrabold ${HEADLINE_CORAL}`,
+                },
               ])}
             </span>
           </span>
@@ -1086,8 +1648,8 @@ export function Hero() {
         type="button"
         aria-label="Scroll to explore"
         data-hero-fade
-        onClick={handleFallAway}
-        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
+        onClick={scrollToNextSection}
+        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
       >
         <svg
           width="21"
