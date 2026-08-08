@@ -103,7 +103,9 @@ const AT = {
   retention: 0.533, //   1.50s
   driven: 0.753, //      1.72s
   motion: 0.993, //      1.96s
-  arrowPill: 1.063, //   2.03s
+  // Pulled onto `motion` from the spec's own 2.03s: the pill and the word it
+  // belongs to now start together rather than the pill trailing by 0.07s.
+  arrowPill: 0.993, //   1.96s
   cursorIn: 1.133, //    2.10s
   amp: 1.243, //         2.21s
   design: 1.353, //      2.32s
@@ -132,6 +134,39 @@ const BLOCK_DRIFT_EM = 126 / 62;
 const CURSOR_ENTRY_RISE_EM = 117 / 62;
 // The block has finished re-centring once the last line has settled.
 const DRIFT_END = AT.founders + 0.5;
+
+/** How long the pair takes to fan apart once it starts. */
+const BADGE_FAN_DURATION = 0.18;
+/**
+ * LinkedIn's entrance rise. Matched to the headline words' own 0.5s tween so it
+ * arrives the same way the text does, rather than snapping in.
+ */
+const BADGE_RISE_DURATION = 0.5;
+/** The rise distance, as a share of the tile — the words' 24/62em on a 1em tile. */
+const BADGE_RISE_FROM = `${(WORD_RISE_EM / BADGE.tile) * 100}%`;
+
+/**
+ * LinkedIn's rotation has three beats, which a single from/to cannot express:
+ * it arrives tilted, straightens as it lands, holds there while it waits alone,
+ * then tilts again on the fan. So it is keyframed across one span with `times`
+ * marking each beat.
+ *
+ * The values are NEGATED tilts because the artwork carries its own +18.26deg:
+ * the element sits at -tilt to read straight, and at 0 to read tilted. Folding
+ * the cancellation in here is also what frees the wrapper in the markup of a CSS
+ * `rotate`, so it can safely become a motion element for the rise — Framer
+ * claims `rotate` out of `style`, and the two cannot share an element.
+ *
+ * Declared here, below `AT` and `WORD_RISE_EM`, because it reads both.
+ */
+const BADGE_ROTATE_DURATION = AT.instagram + BADGE_FAN_DURATION - AT.linkedin;
+const BADGE_ROTATE_KEYFRAMES = [0, -BADGE.linkedinTilt, -BADGE.linkedinTilt, 0];
+const BADGE_ROTATE_TIMES = [
+  0,
+  BADGE_RISE_DURATION / BADGE_ROTATE_DURATION,
+  (AT.instagram - AT.linkedin) / BADGE_ROTATE_DURATION,
+  1,
+];
 
 /**
  * The "Abhay" cursor's journey, on the same reveal-relative clock as `AT`.
@@ -280,12 +315,30 @@ export function Hero() {
   // emerges from behind it (it sits a layer lower) sliding left and tilting the
   // other. Per-property transitions give LinkedIn its two separate beats
   // without needing a second piece of state to track the stage.
-  const badgeSnap = prefersReducedMotion
-    ? { duration: 0 }
-    : { duration: 0.11, delay: AT.linkedin, ease: "easeOut" as const };
   const badgeFan = prefersReducedMotion
     ? { duration: 0 }
-    : { duration: 0.18, delay: AT.instagram, ease: "easeOut" as const };
+    : {
+        duration: BADGE_FAN_DURATION,
+        delay: AT.instagram,
+        ease: "easeOut" as const,
+      };
+  // LinkedIn rises like a headline word rather than snapping in.
+  const badgeRise = prefersReducedMotion
+    ? { duration: 0 }
+    : {
+        duration: BADGE_RISE_DURATION,
+        delay: AT.linkedin,
+        ease: "easeOut" as const,
+      };
+  // One tween spanning rise -> straighten -> hold -> tilt; see the keyframes.
+  const badgeLinkedinRotate = prefersReducedMotion
+    ? { duration: 0 }
+    : {
+        duration: BADGE_ROTATE_DURATION,
+        delay: AT.linkedin,
+        times: BADGE_ROTATE_TIMES,
+        ease: "easeOut" as const,
+      };
   // The hover lift must never inherit an entrance delay.
   const badgeHover = { duration: 0.3, delay: 0, ease: "easeOut" as const };
 
@@ -573,7 +626,7 @@ export function Hero() {
           // duration and drop the hint again once it lands (§9).
           if (headEl) gsap.set(headEl, { y: drift, willChange: "transform" });
           if (ctaArrowRef.current) {
-            gsap.set(ctaArrowRef.current, { autoAlpha: 0, scale: 0 });
+            gsap.set(ctaArrowRef.current, { autoAlpha: 0, y: wordRise });
           }
           if (underlineRef.current) {
             gsap.set(underlineRef.current, {
@@ -647,16 +700,13 @@ export function Hero() {
             );
           }
 
-          // orange arrow pill — no visible overshoot in the reference
+          // Orange arrow pill — rises and fades exactly like a headline word
+          // (same distance, same 0.5s, same default ease) rather than scaling
+          // up, so it arrives at full size alongside "Motion".
           if (ctaArrowRef.current) {
             tl.to(
               ctaArrowRef.current,
-              {
-                autoAlpha: 1,
-                scale: 1,
-                duration: 0.25,
-                ease: "power2.out",
-              },
+              { autoAlpha: 1, y: 0, duration: 0.5 },
               AT.arrowPill,
             );
           }
@@ -1514,31 +1564,32 @@ export function Hero() {
                     className="absolute max-w-none"
                     style={{
                       width: `${BADGE.tile * BADGE.instagramImgScale}em`,
-                      left: "55%",
+                      left: "57%",
                       top: "50%",
                       transform: `translate(-${BADGE.instagramTileCentreX}, -${BADGE.instagramTileCentreY})`,
                     }}
                   />
                 </span>
               </motion.span>
-              {/* LinkedIn badge — right, layered on top. §4c #10: a fast 0.11s
-                  scale snap, noticeably quicker than the orange arrow pill. It
-                  lands flat and centred between the two resting spots, then
-                  slides right into its +18.26deg tilt as the pair fans apart. */}
+              {/* LinkedIn badge — right, layered on top. It rises into place
+                  the way the headline words do, arriving already tilted and
+                  straightening as it lands; it then holds straight and centred
+                  between the two resting spots until the pair fans apart, where
+                  it slides right and takes its +18.26deg tilt back.
+
+                  The rotation is keyframed on this element and the rise lives on
+                  the wrapper inside, because the two beats overlap in time and a
+                  single from/to cannot describe tilted -> straight -> tilted. */}
               <motion.span
                 aria-hidden
                 initial={{
-                  opacity: 0,
-                  scale: 0,
-                  rotate: 0,
+                  rotate: BADGE_ROTATE_KEYFRAMES[0],
                   x: "0%",
                 }}
                 animate={
                   revealed
                     ? {
-                        opacity: 1,
-                        scale: 1,
-                        rotate: BADGE.linkedinTilt,
+                        rotate: BADGE_ROTATE_KEYFRAMES,
                         x: BADGE.linkedinRest,
                         y:
                           hoveredBadge === "linkedin"
@@ -1551,11 +1602,8 @@ export function Hero() {
                     : {}
                 }
                 transition={{
-                  // appears alone, untilted, at the centre of the slot...
-                  opacity: badgeSnap,
-                  scale: badgeSnap,
-                  // ...then slides right and tilts as the pair fans apart
-                  rotate: badgeFan,
+                  rotate: badgeLinkedinRotate,
+                  // slides out of the stack as the pair fans apart
                   x: badgeFan,
                   y: badgeHover,
                   zIndex: { duration: 0 },
@@ -1568,10 +1616,15 @@ export function Hero() {
                   height: `${BADGE.tile}em`,
                 }}
               >
-                <span
+                {/* Carries the rise and the fade. Kept off the element above
+                    because that one owns `y` for the hover lift, and the two
+                    would overwrite each other. */}
+                <motion.span
                   aria-hidden
+                  initial={{ opacity: 0, y: BADGE_RISE_FROM }}
+                  animate={revealed ? { opacity: 1, y: "0%" } : {}}
+                  transition={badgeRise}
                   className="pointer-events-none absolute inset-0"
-                  style={{ rotate: `${-BADGE.linkedinTilt}deg` }}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -1580,12 +1633,12 @@ export function Hero() {
                     className="absolute max-w-none"
                     style={{
                       width: `${BADGE.tile * BADGE.linkedinImgScale}em`,
-                      left: "42%",
+                      left: "44%",
                       top: "50%",
                       transform: `translate(-${BADGE.linkedinTileCentreX}, -${BADGE.linkedinTileCentreY})`,
                     }}
                   />
-                </span>
+                </motion.span>
               </motion.span>
             </motion.span>
             {words([

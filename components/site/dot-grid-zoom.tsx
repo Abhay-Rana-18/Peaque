@@ -168,7 +168,8 @@ export function DotGridZoom({
           if (dsq <= proxSq) {
             const t = 1 - Math.sqrt(dsq) / proximity;
             // Cubic falloff for a tight, lens-like peak near the pointer.
-            dot.targetRadius = baseRadius + (maxRadius - baseRadius) * t * t * t;
+            dot.targetRadius =
+              baseRadius + (maxRadius - baseRadius) * t * t * t;
           } else {
             dot.targetRadius = baseRadius;
           }
@@ -289,10 +290,7 @@ export function DotGridZoom({
   }, []);
 
   return (
-    <div
-      className={cn("relative h-full w-full", className)}
-      style={style}
-    >
+    <div className={cn("relative h-full w-full", className)} style={style}>
       <div ref={wrapperRef} className="relative h-full w-full">
         <canvas
           ref={canvasRef}
