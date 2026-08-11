@@ -233,3 +233,46 @@
     animation: none;
   }
 }
+/* Hero torus knot (torus-knot-flat.tsx): the spin that used to be the 3D
+   mesh's z-rotation, and the old vertical float, as plain CSS. Negative angle
+   = counter-clockwise, matching the mesh's positive three.js z-spin; float
+   amplitude is the old 0.16 units against the 5.36-unit frustum (~3%). */
+@keyframes knot-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+@keyframes knot-float {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-3%);
+  }
+}
+
+@layer utilities {
+  .knot-spin {
+    animation: knot-spin 34s linear infinite;
+  }
+
+  .knot-float {
+    animation: knot-float 14s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .knot-spin,
+  .knot-float {
+    animation: none;
+  }
+}

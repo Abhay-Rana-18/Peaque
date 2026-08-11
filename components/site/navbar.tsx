@@ -101,9 +101,17 @@ export function Navbar() {
 
         {/* Contact Us Button — Fixed Anchored Right */}
         <div className="pointer-events-auto absolute right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] flex items-center">
+          {/* Shape/border/shadow are a literal Figma export (border-radius:
+              12.879px; border: 0.895px solid #0F2100; box-shadow:
+              0 0.895px 9.483px -3.03px rgba(0,0,0,0.19)) — kept as a single
+              non-responsive value, so the breakpoint ladder that used to scale
+              border-width (border-3 → border-[3px]) was dropped: those would
+              otherwise silently override this exact spec at wider viewports.
+              Padding/text-size scaling is untouched. #0F2100 already appears
+              in hero.tsx (the "Motion" arrow pill), so it's not a new token. */}
           <a
             href="#contact"
-            className="hidden rounded-full border-2 border-ink px-5 py-2 text-sm font-semibold text-ink transition-all hover:bg-ink hover:text-cream lg:inline-block xl:px-6 xl:py-2.5 xl:text-base min-[1600px]:px-8 min-[1600px]:py-3 min-[1600px]:text-xl min-[1600px]:border-3 min-[1920px]:px-9 min-[1920px]:py-3.5 min-[1920px]:text-2xl min-[1920px]:border-3 min-[2400px]:px-11 min-[2400px]:py-4 min-[2400px]:text-3xl min-[2400px]:border-4 min-[2800px]:px-13 min-[2800px]:py-5 min-[2800px]:text-4xl min-[2800px]:border-[5px] min-[3300px]:px-16 min-[3300px]:py-6 min-[3300px]:text-5xl min-[3300px]:border-[5px] min-[3840px]:px-19 min-[3840px]:py-7 min-[3840px]:text-6xl min-[3840px]:border-[4px] min-[4400px]:px-22 min-[4400px]:py-8 min-[4400px]:text-7xl min-[4400px]:border-[3px]"
+            className="hidden rounded-full border-[0.895px] border-[#0F2100] px-5 py-2 text-sm font-semibold text-ink shadow-[0_0.895px_9.483px_-3.03px_rgba(0,0,0,0.19)] transition-all hover:bg-ink hover:text-cream lg:inline-block xl:px-6 xl:py-2.5 xl:text-base min-[1600px]:px-8 min-[1600px]:py-3 min-[1600px]:text-xl min-[1920px]:px-9 min-[1920px]:py-3.5 min-[1920px]:text-2xl min-[2400px]:px-11 min-[2400px]:py-4 min-[2400px]:text-3xl min-[2800px]:px-13 min-[2800px]:py-5 min-[2800px]:text-4xl min-[3300px]:px-16 min-[3300px]:py-6 min-[3300px]:text-5xl min-[3840px]:px-19 min-[3840px]:py-7 min-[3840px]:text-6xl min-[4400px]:px-22 min-[4400px]:py-8 min-[4400px]:text-7xl"
           >
             Contact Us
           </a>
@@ -125,10 +133,12 @@ export function Navbar() {
           {links.map((l) => (
             <NavLink key={l.href} {...l} onClick={() => setOpen(false)} />
           ))}
+          {/* Same Figma spec as the desktop pill above — kept in sync so the
+              mobile drawer's button doesn't look like a leftover style. */}
           <a
             href="#contact"
             onClick={() => setOpen(false)}
-            className="mt-3 self-start rounded-full border-2 border-ink px-5 py-2 text-sm font-semibold text-ink"
+            className="mt-3 self-start rounded-full border-[0.895px] border-[#0F2100] px-5 py-2 text-sm font-semibold text-ink shadow-[0_0.895px_9.483px_-3.03px_rgba(0,0,0,0.19)]"
           >
             Contact Us
           </a>
