@@ -133,6 +133,31 @@ const WORD_RISE_EM = 24 / 62;
 const BLOCK_DRIFT_EM = 126 / 62;
 // §5a — the cursor enters 117px below where it lands on "Design".
 const CURSOR_ENTRY_RISE_EM = 117 / 62;
+/**
+ * Daylight left between the arrow tip and the final "n" of "Design" when the
+ * cursor lands — ~3px at a 1440px viewport. Small enough to read as contact,
+ * non-zero so the tip never actually collides with the glyph. The press then
+ * opens this up further: "Design" and the tag each scale about their own
+ * centre, so the word's right edge retreats left while the tag's arrow pulls
+ * right, and the two withdraw from each other.
+ */
+const TIP_CLEARANCE_EM = 0.05;
+/**
+ * Where the tip sits vertically, as a fraction down the word's line box.
+ *
+ * A fraction rather than a font metric because the word is measured in the
+ * SCRIPT face (the swap has not happened yet) but ends up in Archivo, and the
+ * two disagree on x-height and ascent — so anything derived from one would be
+ * wrong for the other. The line box itself is set by the h1's leading, which
+ * both share.
+ *
+ * Left at the plain centre. It was briefly dropped to 0.40 to chase a tip that
+ * sat too low, but that was treating the symptom: the real cause was measuring
+ * the word while the intro still had it parked a rise-height below its resting
+ * position (see wordRestTop). With that backed out, the centre lands where it
+ * should, and biasing on top of it would overshoot above the letter.
+ */
+const TIP_HEIGHT_ANCHOR = 0.5;
 // The block has finished re-centring once the last line has settled.
 const DRIFT_END = AT.founders + 0.5;
 
@@ -241,8 +266,11 @@ const BADGE_ROTATE_TIMES = [
  */
 // Not `as const` — Framer types `ease` as a mutable Easing[], so a readonly
 // tuple is rejected outright.
-const BADGE_ROTATE_EASES: ("easeOut" | "linear" | [number, number, number, number])[] =
-  ["easeOut", "linear", BADGE_FAN_EASE];
+const BADGE_ROTATE_EASES: (
+  | "easeOut"
+  | "linear"
+  | [number, number, number, number]
+)[] = ["easeOut", "linear", BADGE_FAN_EASE];
 
 /**
  * The "Abhay" cursor's journey, on the same reveal-relative clock as `AT`.
@@ -271,6 +299,22 @@ const CURSOR = {
   parkDur: 0.8,
   /** only once parked does the arrow sweep to its default angle */
   arrowSettleMs: 700,
+  /**
+   * The click press. Everything inside the "Design" box — the word, its
+   * selection frame, the slider, and the "Abhay" tag with its arrow — dips
+   * together, bottoms out exactly ON the click, then springs back. The font
+   * swap therefore happens at the trough, so the new face arrives already at
+   * the pressed size and grows out of it.
+   *
+   * This started at 0.985 (1.5%) over 0.1s and was invisible — roughly 1.5px
+   * per side, under the threshold at which a transform that brief registers at
+   * all. 0.95 is 5%, which is the usual range for a button press: felt rather
+   * than watched. The dip is also slowed a little, since a change this small
+   * needs a few frames on screen to read as movement instead of a glitch.
+   */
+  pressScale: 0.95,
+  pressDownDur: 0.14,
+  pressUpDur: 0.3,
 } as const;
 
 // Point on a stadium / rounded-pill shape outline of half-width `a` and half-height `b`
@@ -359,6 +403,14 @@ export function Hero() {
    * and the tag by the same amount, so the offset between them cancels out.
    */
   const designBoxRef = useRef<HTMLSpanElement>(null);
+  /**
+   * The inner span holding just the word, its selection frame and its handles —
+   * i.e. everything the click press should shrink, and nothing it should not.
+   * Distinct from designBoxRef, which also contains the "Abhay" tag: pressing
+   * that one scales the tag and the word together, so the gap between them
+   * shrinks with everything else instead of opening up.
+   */
+  const designInnerRef = useRef<HTMLSpanElement>(null);
   const [isDesignClicked, setIsDesignClicked] = useState(false);
   const ABHAY_ARROW_GAP = 20;
   const ABHAY_REACT_RADIUS = 160;
@@ -1083,6 +1135,17 @@ export function Hero() {
     const trackRect = trackEl.getBoundingClientRect();
     const arrowEl = abhayEl.querySelector<HTMLElement>("[data-abhay-arrow]");
     const arrowRect = arrowEl?.getBoundingClientRect();
+    // Pinned to the arrow's tail (x=6 of the 44-unit viewBox) so the recoil at
+    // the click beat pivots there — the tail holds still and only the tip pulls
+    // back. GSAP would otherwise default to the box centre and move both ends.
+    const arrowSvg = arrowEl?.querySelector<SVGSVGElement>("svg") ?? null;
+    if (arrowSvg) {
+      gsap.set(arrowSvg, { transformOrigin: `${(6 / 44) * 100}% 50%` });
+    }
+
+    // Declared here rather than beside the entry maths further down, because
+    // the tip's clearance from the "n" is measured against it.
+    const headFont = parseFloat(getComputedStyle(designEl).fontSize) || 62;
 
     const abhayCenterX = abhayRect.left + abhayRect.width / 2;
     const abhayCenterY = abhayRect.top + abhayRect.height / 2;
@@ -1105,9 +1168,39 @@ export function Hero() {
     const screenTipX = abhayCenterX + arrowBoundaryScreen.x - arrowTipScreenLen;
     const screenTipY = abhayCenterY + arrowBoundaryScreen.y;
 
-    // 1. Point the arrow tip EXACTLY at the word "Design" — where it clicks.
-    const designTargetX = designRect.right - screenTipX;
-    const designTargetY = designRect.top + designRect.height / 2 - screenTipY;
+    // 1. Park the tip just off the final "n" of "Design" — close enough to read
+    //    as contact, with a hair of daylight so it never actually touches.
+    //
+    //    Aimed at the WORD's right edge, not the box's. The box is sized by a
+    //    ghost pinned to the resting weight, but the intro drops the weight to
+    //    its minimum, so the real glyphs sit inset from the box and aiming at
+    //    the box left an obvious gap. Measuring the word is safe here precisely
+    //    because of when it happens: the script face this is measured in has a
+    //    400 floor, so the drop to weight 200 does not actually narrow it, and
+    //    the family swap that WOULD change the width lands on the click itself
+    //    — by which point the cursor is already leaving for the slider.
+    const wordEl = designWordRef.current;
+    const wordRect = (wordEl ?? designEl).getBoundingClientRect();
+    // CRITICAL: back out the word's own animation offset. This measures during
+    // the reveal, and the intro parks every headline word BELOW its resting
+    // spot at mount (gsap.set(wordEls, { y: wordRise })) ready to rise into
+    // place. wordRise is 24/62em — about 25px at 1440 — so the rect read here
+    // is that far low, and anything aimed at it lands a whole lowercase
+    // letter-height beneath the glyph it was supposed to meet. x is unaffected:
+    // that tween only moves y.
+    const wordRiseOffset = wordEl
+      ? (gsap.getProperty(wordEl, "y") as number)
+      : 0;
+    const wordRestTop = wordRect.top - wordRiseOffset;
+    const designTargetX =
+      wordRect.right + TIP_CLEARANCE_EM * headFont - screenTipX;
+    // Vertically on the word too, not the box: the box carries pb-[0.08em] for
+    // descender room, which drags its centre below the glyphs' own. But the
+    // word's own rect is no better as a midpoint — it is the full line box,
+    // ascender to descender, so its centre lands most of the way down the "n".
+    // TIP_HEIGHT_ANCHOR aims into the upper part of the lowercase band instead.
+    const designTargetY =
+      wordRestTop + wordRect.height * TIP_HEIGHT_ANCHOR - screenTipY - 10;
 
     // 2. Point the arrow tip EXACTLY at the slider handle, parked at the bottom
     //    of its track (weight = DESIGN_WEIGHT_MIN), then at the handle's resting
@@ -1159,7 +1252,6 @@ export function Hero() {
     // arrowhead poking back into view on the right. screenTipX is already the
     // arrow tip's x at the due-left angle it holds through the approach — i.e.
     // the leftmost point of the whole assembly — so clearing that clears both.
-    const headFont = parseFloat(getComputedStyle(designEl).fontSize) || 62;
     const startX = window.innerWidth - screenTipX + 8;
     const startY = designTargetY + headFont * CURSOR_ENTRY_RISE_EM;
 
@@ -1250,6 +1342,66 @@ export function Hero() {
         },
         `+=${CURSOR.parkGap}`,
       );
+
+    // A recoil on the click beat, so it reads as a click rather than the frame
+    // simply appearing. Scaling the SVG horizontally about the arrow's TAIL is
+    // what confines the movement to the tip: the tail sits on the origin and
+    // does not shift, while the tip — 34 viewBox units away — draws back ~2
+    // units, a shade over 1px on screen. Translating the arrow would slide the
+    // whole shape instead.
+    //
+    // It goes on the <svg>, never the [data-abhay-arrow] span: that span's
+    // transform is rewritten from React state every frame by the cursor chase,
+    // so GSAP and React would fight over it. The svg sits inside that rotation,
+    // so the scale runs along the arrow's own axis whatever way it is pointing.
+    //
+    // Appended after the chain rather than spliced into it because arrowSvg is
+    // nullable and a null GSAP target warns. Both positions are absolute, so
+    // insertion order does not affect the sequence above — and it must stay
+    // that way: the park tween is placed with a RELATIVE `+=`, which resolves
+    // against the timeline end at the moment it is added.
+    if (arrowSvg) {
+      tl.to(
+        arrowSvg,
+        { scaleX: 0.94, duration: 0.06, ease: "power2.in" },
+        AT.designSwap,
+      ).to(
+        arrowSvg,
+        { scaleX: 1, duration: 0.18, ease: "back.out(3)" },
+        AT.designSwap + 0.06,
+      );
+    }
+
+    // The press. TWO targets, each scaling about its own centre — that is the
+    // whole trick. Scaling their shared parent instead (as this first did)
+    // shrinks every distance inside it by the same factor, the tip-to-"n" gap
+    // included, so the two close on each other rather than parting. Scaled
+    // separately, the word's right edge withdraws left while the tag's arrow
+    // withdraws right, and the daylight between them widens through the dip.
+    //
+    // The down leg ENDS on AT.designSwap and the up leg starts there, so the
+    // trough coincides with the font swap: the new face appears already at the
+    // pressed size, then grows out of it. Transform-only, nothing reflows.
+    //
+    // Note the Design target is the INNER span, not designBoxRef — the box also
+    // contains the tag, which needs its own scale. And not the centring span
+    // below it either: that carries a Tailwind -translate-x-1/2, and GSAP folds
+    // a standalone CSS `translate` into its transform, freezing that -50% as
+    // pixels. The inner span has only padding, so there is nothing to fold.
+    const pressTargets = [designInnerRef.current, abhayEl].filter(Boolean);
+    tl.to(
+      pressTargets,
+      {
+        scale: CURSOR.pressScale,
+        duration: CURSOR.pressDownDur,
+        ease: "power2.in",
+      },
+      AT.designSwap - CURSOR.pressDownDur,
+    ).to(
+      pressTargets,
+      { scale: 1, duration: CURSOR.pressUpDur, ease: "back.out(2)" },
+      AT.designSwap,
+    );
 
     return () => {
       tl.kill();
@@ -1425,7 +1577,7 @@ export function Hero() {
           className="absolute hidden text-right min-[1024px]:block min-[1024px]:right-[calc(50%-29rem)] min-[1024px]:-top-0 min-[1280px]:right-[calc(50%-30rem)] min-[1440px]:right-[calc(50%-33rem)] min-[1440px]:-top-10 min-[1600px]:right-[calc(50%-37rem)] min-[1600px]:-top-11 min-[1920px]:right-[calc(50%-42rem)] min-[1920px]:-top-14 min-[2120px]:right-[calc(50%-49rem)] min-[2120px]:-top-15 min-[2400px]:right-[calc(50%-56rem)] min-[2400px]:-top-17 min-[2800px]:right-[calc(50%-65rem)] min-[2800px]:-top-20 min-[3300px]:right-[calc(50%-80rem)] min-[3300px]:-top-27 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:-top-30 min-[4400px]:right-[calc(50%-98rem)] min-[4400px]:-top-38 min-[5120px]:right-[calc(50%-100rem)] min-[5120px]:-top-40 min-[6000px]:right-[calc(50%-130rem)] min-[6000px]:-top-45"
         >
           <div className="rotate-10 origin-top-right min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[1920px]:scale-135 min-[2120px]:scale-140 min-[2400px]:scale-170 min-[2800px]:scale-195 min-[3300px]:scale-230 min-[3840px]:scale-260 min-[4400px]:scale-295 min-[5120px]:scale-345 min-[6000px]:scale-400 w-48 min-[1280px]:w-48 min-[1440px]:w-46 min-[1600px]:w-46 min-[1920px]:w-46 min-[2400px]:w-46 min-[2800px]:w-46 min-[3300px]:w-46 min-[3840px]:w-46 min-[4400px]:w-46">
-            <p className="font-kalam text-xs sm:text-sm min-[1280px]:text-base leading-snug text-ink/70 [text-wrap:balance]">
+            <p className="font-kalam text-xs sm:text-sm min-[1280px]:text-base leading-snug text-black/60  [text-wrap:balance]">
               We give every project the love <br />
               and affection it deserves :)
             </p>
@@ -1433,7 +1585,7 @@ export function Hero() {
               viewBox="0 0 113 83"
               fill="none"
               aria-hidden
-              className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-ink"
+              className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-black"
             >
               <path
                 ref={asideScribblePathRef}
@@ -1537,20 +1689,10 @@ export function Hero() {
               data-fall-item
               className="relative mx-[0.0926em] inline-block overflow-visible align-top"
             >
-              {/* The box is sized by a ghost pinned to the resting weight, and
-                  the real word is taken out of flow on top of it. Dragging the
-                  slider then changes only how "Design" is drawn, never how much
-                  room it claims — heavier weights spill over this box instead of
-                  re-flowing the whole line, and the selection frame and slider
-                  rail (both positioned against this box) stay put too.
-
-                  The ghost tracks `designFontFamily` but not `designWeight`:
-                  the box should still follow the one-off swap out of the script
-                  face, just not the live weight drag.
-
-                  Nothing clips here on purpose — the old `overflow-hidden` mask
-                  would have cut the overspill off rather than letting it show. */}
-              <span className="relative inline-block pb-[0.08em] -mb-[0.08em] align-top">
+              <span
+                ref={designInnerRef}
+                className="relative inline-block pb-[0.08em] -mb-[0.08em] align-top"
+              >
                 <span
                   aria-hidden
                   className="invisible"
@@ -1596,22 +1738,25 @@ export function Hero() {
                       and toward the slider rail; that overlap is accepted. */}
                   <span
                     aria-hidden
-                    className={`pointer-events-none absolute -inset-1 min-[1024px]:-inset-[0.05em] border border-dashed border-ink/50 ${
+                    className={`pointer-events-none absolute -top-1 -bottom-1 -left-2 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] min-[1024px]:-right-[0.1em] border border-dashed border-black/50 ${
                       designSelected ? "opacity-100" : "opacity-0"
                     }`}
                   />
 
-                  {/* 4 corner dots marking the selection — centered exactly on the dashed box's corners */}
+                  {/* 4 corner dots marking the selection — centered exactly on
+                      the dashed box's corners. left/right MUST track the frame's
+                      -left/-right above (top/bottom already matched it) or the
+                      dots drift off the corners once x and y diverge. */}
                   {[
-                    "-top-1 -left-1 min-[1024px]:-top-[0.05em] min-[1024px]:-left-[0.05em] -translate-x-1/2 -translate-y-1/2",
-                    "-top-1 -right-1 min-[1024px]:-top-[0.05em] min-[1024px]:-right-[0.05em] translate-x-1/2 -translate-y-1/2",
-                    "-bottom-1 -left-1 min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.05em] -translate-x-1/2 translate-y-1/2",
-                    "-bottom-1 -right-1 min-[1024px]:-bottom-[0.05em] min-[1024px]:-right-[0.05em] translate-x-1/2 translate-y-1/2",
+                    "-top-1 -left-2 min-[1024px]:-top-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 -translate-y-1/2",
+                    "-top-1 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 -translate-y-1/2",
+                    "-bottom-1 -left-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 translate-y-1/2",
+                    "-bottom-1 -right-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 translate-y-1/2",
                   ].map((pos) => (
                     <span
                       key={pos}
                       aria-hidden
-                      className={`pointer-events-none absolute ${pos} size-1.5 min-[1024px]:size-[0.075em] min-[1024px]:min-w-[6px] min-[1024px]:min-h-[6px] rounded-full bg-black ${
+                      className={`pointer-events-none absolute ${pos} size-1.5 min-[1024px]:size-[0.075em] min-[1024px]:min-w-[6px] min-[1024px]:min-h-[6px] bg-black ${
                         designSelected ? "opacity-100" : "opacity-0"
                       }`}
                     />
@@ -1634,9 +1779,9 @@ export function Hero() {
                 // Top/bottom deliberately mirror the dashed selection box's
                 // `-inset-1` / `-inset-[0.05em]` above, so the rail is exactly
                 // as tall as the box it belongs to. The box itself stays wide —
-                // a 1px rail is far too thin to grab, so this keeps a ~20px
-                // pointer target with the line centred inside it.
-                className={`absolute -right-0 min-[1024px]:left-[calc(100%+0.13em)] -top-1 min-[1024px]:-top-[0.05em] -bottom-1 min-[1024px]:-bottom-[0.05em] flex w-5 min-[1024px]:w-[0.3em] min-[1024px]:min-w-[20px] items-center justify-center ${
+                // a 1px rail is far too thin to grab, so this keeps a ~14px
+                // pointer target (was 20px) with the line centred inside it.
+                className={`absolute -right-0 min-[1024px]:left-[calc(100%+0.18em)] -top-1 min-[1024px]:-top-[0.05em] -bottom-1 min-[1024px]:-bottom-[0.05em] flex w-5 min-[1024px]:w-[0.3em] min-[1024px]:min-w-[20px] items-center justify-center ${
                   designSelected
                     ? "opacity-100 pointer-events-auto cursor-pointer"
                     : "opacity-0 pointer-events-none"
@@ -1647,13 +1792,13 @@ export function Hero() {
                     breakpoint — the same reason the dashed box beside it uses a
                     1px border. Solid `ink/50` to match that border too; the old
                     sand-to-ink gradient was invisible at this width. */}
-                <span aria-hidden className="h-full w-[2px] bg-ink/50" />
+                <span aria-hidden className="h-full w-[2px] bg-black/50" />
                 <span
                   aria-hidden
-                  // Sized down to suit the hairline rail — roughly the design's
-                  // 15 x 6.667px handle rather than the old 24 x 12px, which
-                  // dwarfed a 1px line.
-                  className="absolute left-1/2 h-1.5 w-3.5 min-[1024px]:h-[0.105em] min-[1024px]:w-[0.236em] min-[1024px]:min-h-[7px] min-[1024px]:min-w-[15px] rounded-md min-[1024px]:rounded-[0.1em] border border-[#175800] border-2 bg-white opacity-100 shadow-sm"
+                  // Height raised well past the design's 6.667px (grip is easier
+                  // to see/land a pointer on when it isn't razor-thin); width
+                  // nudged up only slightly to stay a mostly-vertical tick.
+                  className="absolute left-1/2 h-2 w-4 min-[1024px]:h-[0.14em] min-[1024px]:w-[0.262em] min-[1024px]:min-h-[9px] min-[1024px]:min-w-[17px] rounded-md min-[1024px]:rounded-[0.1em] border border-[#175800] border-2 bg-white opacity-100 shadow-sm"
                   style={{
                     top: `${
                       100 -
@@ -1936,7 +2081,7 @@ export function Hero() {
         aria-label="Scroll to explore"
         data-hero-fade
         onClick={scrollToNextSection}
-        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-ink/90 text-black transition-colors hover:border-ink hover:border-white hover:bg-ink/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
+        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-black/90 text-black transition-colors hover:border-black hover:border-white hover:bg-black/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
       >
         <svg
           width="21"
