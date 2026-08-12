@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 interface Dot {
@@ -16,8 +16,40 @@ export interface DotGridZoomProps {
   maxSize?: number;
   proximity?: number;
   color?: string;
+  activeColor?: string;
   className?: string;
   style?: React.CSSProperties;
+}
+
+function hexToRgba(colorStr: string) {
+  if (!colorStr || colorStr === "transparent") {
+    return { r: 0, g: 0, b: 0, a: 0 };
+  }
+  let hex = colorStr.replace("#", "").trim();
+  if (hex.length === 3) {
+    hex = hex.split("").map((c) => c + c).join("") + "ff";
+  } else if (hex.length === 4) {
+    hex = hex.split("").map((c) => c + c).join("");
+  } else if (hex.length === 6) {
+    hex += "ff";
+  }
+  if (hex.length === 8) {
+    return {
+      r: parseInt(hex.slice(0, 2), 16) || 0,
+      g: parseInt(hex.slice(2, 4), 16) || 0,
+      b: parseInt(hex.slice(4, 6), 16) || 0,
+      a: (parseInt(hex.slice(6, 8), 16) || 0) / 255,
+    };
+  }
+  return { r: 0, g: 0, b: 0, a: 1 };
+}
+
+function getLighterColor(colorStr: string): string {
+  const { r, g, b, a } = hexToRgba(colorStr);
+  const lr = Math.min(255, Math.round(r + (255 - r) * 0.65));
+  const lg = Math.min(255, Math.round(g + (255 - g) * 0.65));
+  const lb = Math.min(255, Math.round(b + (255 - b) * 0.65));
+  return `rgba(${lr},${lg},${lb},${a})`;
 }
 
 /**
@@ -31,6 +63,7 @@ export function DotGridZoom({
   maxSize = 16,
   proximity = 140,
   color = "#D8D8D8",
+  activeColor,
   className,
   style,
 }: DotGridZoomProps) {
@@ -110,6 +143,12 @@ export function DotGridZoom({
       mql?.removeEventListener("change", onDprChange);
     };
   }, [buildGrid]);
+
+  const baseRgb = useMemo(() => hexToRgba(color), [color]);
+  const activeRgb = useMemo(
+    () => (activeColor ? hexToRgba(activeColor) : hexToRgba(getLighterColor(color))),
+    [color, activeColor]
+  );
 
   useEffect(() => {
     const baseRadius = baseSize / 2;
@@ -226,7 +265,7 @@ export function DotGridZoom({
       // actually keeps this cheap at wide viewports: a 4400px-wide grid has
       // ~6,000 dots vs ~2,000 at 1440px, and per-call Canvas2D overhead — not
       // raw pixel fill — was the real cost driving frame rate down (measured
-      // 55fps @ 1440px vs 25fps @ 4400px with the old per-dot calls). Fewer,
+      // 55fps @ 1440px vs 25fps @ 4400px with the old per-call). Fewer,
       // bigger draw calls scale far better than many tiny ones.
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -244,6 +283,16 @@ export function DotGridZoom({
 
       if (bulgingDots) {
         for (const dot of bulgingDots) {
+          const t = Math.min(
+            1,
+            Math.max(0, (dot.radius - baseRadius) / Math.max(0.001, maxRadius - baseRadius))
+          );
+          const r = Math.round(baseRgb.r + (activeRgb.r - baseRgb.r) * t);
+          const g = Math.round(baseRgb.g + (activeRgb.g - baseRgb.g) * t);
+          const b = Math.round(baseRgb.b + (activeRgb.b - baseRgb.b) * t);
+          const a = baseRgb.a + (activeRgb.a - baseRgb.a) * t;
+
+          ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
           ctx.beginPath();
           ctx.arc(dot.cx, dot.cy, dot.radius, 0, Math.PI * 2);
           ctx.fill();
@@ -255,7 +304,7 @@ export function DotGridZoom({
 
     rafId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafId);
-  }, [baseSize, maxSize, proximity, color]);
+  }, [baseSize, maxSize, proximity, color, baseRgb, activeRgb]);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {

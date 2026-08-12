@@ -104,7 +104,7 @@ export function DotGrid({
   dotSize = 16,
   gap = 32,
   baseColor = "#E5E5E5",
-  activeColor = "#E5E5E5",
+  activeColor,
   proximity = 150,
   speedTrigger = 100,
   shockRadius = 250,
@@ -138,7 +138,15 @@ export function DotGrid({
   });
 
   const baseRgb = useMemo(() => hexToRgba(baseColor), [baseColor]);
-  const activeRgb = useMemo(() => hexToRgba(activeColor), [activeColor]);
+  const activeRgb = useMemo(() => {
+    if (activeColor && activeColor !== baseColor) {
+      return hexToRgba(activeColor);
+    }
+    const lr = Math.min(255, Math.round(baseRgb.r + (255 - baseRgb.r) * 0.65));
+    const lg = Math.min(255, Math.round(baseRgb.g + (255 - baseRgb.g) * 0.65));
+    const lb = Math.min(255, Math.round(baseRgb.b + (255 - baseRgb.b) * 0.65));
+    return { r: lr, g: lg, b: lb, a: baseRgb.a };
+  }, [baseColor, activeColor, baseRgb]);
 
   const buildGrid = useCallback(() => {
     const wrap = wrapperRef.current;

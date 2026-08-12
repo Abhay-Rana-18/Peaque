@@ -93,7 +93,10 @@ export function Navbar() {
         </a>
 
         {/* Links — Centered & Spaced out smoothly */}
-        <div className="pointer-events-auto hidden items-center justify-center gap-6 lg:flex lg:gap-8 xl:gap-10 min-[1600px]:gap-12 min-[1920px]:gap-14 min-[2400px]:gap-16 min-[2800px]:gap-20 min-[3300px]:gap-24 min-[3840px]:gap-28 min-[4400px]:gap-36">
+        <div
+          data-nav-links
+          className="pointer-events-auto hidden items-center justify-center gap-6 lg:flex lg:gap-8 xl:gap-10 min-[1600px]:gap-12 min-[1920px]:gap-14 min-[2400px]:gap-16 min-[2800px]:gap-20 min-[3300px]:gap-24 min-[3840px]:gap-28 min-[4400px]:gap-36"
+        >
           {links.map((l) => (
             <NavLink key={l.href} {...l} />
           ))}

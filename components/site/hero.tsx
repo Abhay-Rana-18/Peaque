@@ -5,6 +5,7 @@ import { gsap } from "@/lib/gsap";
 import { motion } from "motion/react";
 import { DotGridZoom } from "./dot-grid-zoom";
 import { TorusKnotFlat } from "./torus-knot-flat";
+import { PROJECTS, PROJECT_COUNT, ProjectCard } from "./project-card";
 
 type Token = {
   text: string;
@@ -142,6 +143,38 @@ const CURSOR_ENTRY_RISE_EM = 117 / 62;
  * right, and the two withdraw from each other.
  */
 const TIP_CLEARANCE_EM = 0.05;
+/**
+ * Scroll distance, in svh, given to the hero-to-video handover — on top of the
+ * first screenful the hero occupies normally.
+ */
+const HANDOVER_RUNWAY_SVH = 110;
+/**
+ * Where in that runway the video takes over, 0-1. The hero's content clears the
+ * frame first and the card only starts rising once it has; overlapping them
+ * reads as two things crossing rather than one replacing the other.
+ */
+const HANDOVER_REEL_START = 0.42;
+/** How long the video+tags group takes to rise into place, in the same 0-1 units. */
+const HANDOVER_VIDEO_DURATION = 0.35;
+/**
+ * Scroll budget, in svh, for ONE project-to-project change: a stretch where the
+ * slide simply sits and can be read, then the 3D turn that swaps it.
+ *
+ * These are in svh rather than timeline units because svh is the thing with a
+ * real feel to it — how far the wheel travels. The timeline durations are
+ * derived from them at build time against the handover's own measured length,
+ * which keeps scroll-per-unit identical across the whole runway; hand-picking
+ * both halves independently is what makes a scrubbed sequence speed up and slow
+ * down for no visible reason.
+ */
+const SLIDE_HOLD_SVH = 55;
+const SLIDE_FLIP_SVH = 70;
+/** Rest after the last slide, so the final project is readable before release. */
+const SLIDE_TAIL_SVH = 45;
+/** Every transition after the first slide — three of them for four projects. */
+const SLIDE_TRANSITIONS = PROJECT_COUNT - 1;
+const SLIDES_RUNWAY_SVH =
+  (SLIDE_HOLD_SVH + SLIDE_FLIP_SVH) * SLIDE_TRANSITIONS + SLIDE_TAIL_SVH;
 /**
  * Where the tip sits vertically, as a fraction down the word's line box.
  *
@@ -376,7 +409,21 @@ function nearestEquivalentAngle(target: number, current: number) {
 
 export function Hero() {
   const scope = useRef<HTMLElement>(null);
+  /**
+   * The scroll runway wrapping the sticky stage. Its extra height IS the
+   * handover's scrub distance — the trigger has to be this element and not the
+   * section, because the section is sticky and therefore stops moving relative
+   * to the viewport the moment the transition starts.
+   */
+  const runwayRef = useRef<HTMLDivElement>(null);
   const introRef = useRef<gsap.core.Timeline | null>(null);
+  /**
+   * Which project is showing. Derived from scroll position rather than stepped
+   * on each flip, so it is a pure function of where the page is — scrubbing
+   * backwards walks it back correctly with no counter to keep in sync, and a
+   * mid-scroll reload lands on the right slide.
+   */
+  const [activeProject, setActiveProject] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const revealedRef = useRef(false);
   const [hoveredBadge, setHoveredBadge] = useState<
@@ -761,7 +808,7 @@ export function Hero() {
             gsap.set(pathEl, {
               strokeDasharray: length,
               strokeDashoffset: length,
-              autoAlpha: 0.7,
+              autoAlpha: 0.6,
             });
             return length;
           };
@@ -790,22 +837,617 @@ export function Hero() {
           // straight before it leans over rather than doing both at once.
           const tiltSettleAt = AT.tagLeft + 0.19;
 
-          // gentle parallax out as you scroll away
-          gsap.to("[data-hero-inner]", {
-            yPercent: isDesktop ? -12 : -6,
-            autoAlpha: 0.25,
-            ease: "none",
+          // Hero-to-video handover, scrubbed across the runway. This replaces
+          // the old gentle parallax (yPercent -12, autoAlpha 0.25 against the
+          // section) — that tween did a weaker version of the same thing, and
+          // leaving both in place would have had two triggers writing the same
+          // properties on the same element.
+          //
+          // Triggered on the RUNWAY, not the section: the section is sticky, so
+          // once the handover begins it no longer moves relative to the
+          // viewport and its own scroll positions would stop advancing.
+          //
+          // Only the content leaves. The background, the knot and the dot grid
+          // are outside [data-hero-inner], so they hold their positions and the
+          // stage stays continuous underneath the swap.
+          const noteText =
+            scope.current?.querySelector<HTMLElement>("[data-note-text]");
+          const noteSvg = scope.current?.querySelector<SVGElement>(
+            "[data-note-arrow-svg]",
+          );
+          const notePath = scope.current?.querySelector<SVGPathElement>(
+            "[data-note-arrow-path]",
+          );
+          const noteHead = scope.current?.querySelector<SVGPathElement>(
+            "[data-note-arrow-head]",
+          );
+
+          const prepareNotePath = (
+            pathEl: SVGPathElement | null | undefined,
+          ) => {
+            if (!pathEl) return 0;
+            const length = pathEl.getTotalLength();
+            gsap.set(pathEl, {
+              strokeDasharray: length,
+              strokeDashoffset: length,
+              autoAlpha: 1,
+            });
+            return length;
+          };
+
+          const notePathLen = prepareNotePath(notePath);
+          const noteHeadLen = prepareNotePath(noteHead);
+
+          // NOTE_FALL_TILT: right-side fall tilt in degrees (left side fixed by 0% 50% origin)
+          const NOTE_FALL_TILT = 3.208;
+
+          if (noteText) {
+            const p0Pivot =
+              PROJECTS[0]?.notePivot === "right"
+                ? "100% 50%"
+                : PROJECTS[0]?.notePivot === "left"
+                ? "0% 50%"
+                : PROJECTS[0]?.notePivot ?? "0% 50%";
+            gsap.set(noteText, {
+              autoAlpha: 0,
+              y: 0,
+              // Start straight (0 deg)
+              rotation: 0,
+              // Dynamic pivot based on project spec ("left" = 0% 50%, "right" = 100% 50%)
+              transformOrigin: p0Pivot,
+            });
+          }
+
+          if (noteSvg) {
+            gsap.set(noteSvg, { autoAlpha: 0 });
+          }
+
+          /**
+           * Total timeline length, filled in once every tween has been added.
+           * Read by onUpdate to turn the trigger's 0-1 progress back into
+           * timeline TIME, which is the unit all the cue points below are in.
+           *
+           * It has to be a variable rather than `handover.duration()` inline:
+           * ScrollTrigger can call onUpdate while the timeline is still being
+           * constructed, and comparing against a duration that is still growing
+           * would fire the cues at the wrong scroll positions. Zero means "not
+           * built yet", so onUpdate simply does nothing until it is.
+           */
+          let timelineTotal = 0;
+          /** Timeline time at which each flip is exactly edge-on — the swap beats. */
+          const flipMidpoints: number[] = [];
+
+          const handover = gsap.timeline({
             scrollTrigger: {
-              trigger: scope.current,
+              trigger: runwayRef.current,
               start: "top top",
-              end: "bottom top",
+              end: "bottom bottom",
               scrub: true,
+              // The knot's travel is measured from window.innerHeight, so it
+              // has to be recomputed rather than kept from the first build.
+              invalidateOnRefresh: true,
+              onUpdate: (self) => {
+                if (!timelineTotal) return;
+                const t = self.progress * timelineTotal;
+
+                // Which slide is showing: count how many flips have passed
+                // their edge-on beat. Recomputed from scratch every update
+                // rather than incremented, so scrubbing backwards is handled by
+                // the same line of code and cannot drift out of step.
+                let next = 0;
+                for (let i = 0; i < flipMidpoints.length; i++) {
+                  if (t >= flipMidpoints[i]) next = i + 1;
+                }
+                // React bails out on an unchanged value, so this is a no-op on
+                // the vast majority of scroll events.
+                setActiveProject(next);
+              },
             },
           });
+
+          const navLinksEl =
+            document.querySelector<HTMLElement>("[data-nav-links]");
+
+          handover
+            .to(
+              "[data-hero-inner]",
+              { yPercent: -70, autoAlpha: 0, ease: "none" },
+              0,
+            )
+            // The cue belongs to the hero, so it goes with it — but faster, so
+            // it is gone well before the card arrives over that corner.
+            .to(
+              "[data-hero-fade]",
+              { autoAlpha: 0, ease: "none", duration: 0.3 },
+              0,
+            )
+            // Fade out the background dots (DotGridZoom) on scroll to Projects
+            .to(
+              "[data-hero-dots]",
+              { autoAlpha: 0, ease: "none", duration: 0.4 },
+              0,
+            )
+            // The reel stage itself just needs to stop being hidden — its own
+            // children now carry the entrance motion, so this is a snap rather
+            // than a tween (a fade here on top of theirs would double-dim them).
+            .set("[data-hero-reel]", { autoAlpha: 1 }, HANDOVER_REEL_START);
+
+          const flipEl =
+            scope.current?.querySelector<HTMLElement>("[data-project-flip]");
+
+          if (flipEl) {
+            // Video card flips into view around 3D Y axis on initial handover/onLoad
+            // while rising from bottom to top.
+            handover.fromTo(
+              flipEl,
+              { rotateY: -90 },
+              {
+                rotateY: 0,
+                ease: "none",
+                duration: HANDOVER_VIDEO_DURATION,
+              },
+              HANDOVER_REEL_START,
+            );
+          }
+
+          handover
+            .fromTo(
+              "[data-project-video]",
+              { yPercent: 35 },
+              {
+                yPercent: 0,
+                ease: "none",
+                duration: HANDOVER_VIDEO_DURATION,
+              },
+              HANDOVER_REEL_START,
+            )
+            .fromTo(
+              "[data-project-video]",
+              { autoAlpha: 0 },
+              {
+                autoAlpha: 1,
+                ease: "none",
+                duration: HANDOVER_VIDEO_DURATION * 0.34,
+              },
+              HANDOVER_REEL_START,
+            );
+
+          // ---- Note + Arrow: sequential handover animation ----------------
+          // 1. Text fades in straight while card rises so it renders cleanly
+          // 2. Once card is almost completely risen, text tilts to its angle
+          // 3. Arrow stem & arrowhead draw right after tilt starts
+          const noteStart = HANDOVER_REEL_START;
+          const noteDur = HANDOVER_VIDEO_DURATION;
+
+          // Determine target tilt angle for project 0 (defaults to NOTE_FALL_TILT)
+          const targetTilt = PROJECTS[0]?.noteRotation ?? NOTE_FALL_TILT;
+
+          if (noteText) {
+            // Step 1: Text fades in straight just before tilting starts (50% -> 75% card rise)
+            handover.to(
+              noteText,
+              { autoAlpha: 0.8, duration: noteDur * 0.25, ease: "none" },
+              noteStart + noteDur * 0.5,
+            );
+            // Step 2: Once card has risen up almost completely (~75%), start tilting text
+            handover.to(
+              noteText,
+              { rotation: targetTilt, duration: noteDur * 0.3, ease: "power1.out" },
+              noteStart + noteDur * 0.75,
+            );
+          }
+
+          if (noteSvg) {
+            // Step 3: Arrow SVG container fades in as tilt begins
+            handover.to(
+              noteSvg,
+              { autoAlpha: 1, duration: noteDur * 0.15, ease: "none" },
+              noteStart + noteDur * 0.75,
+            );
+          }
+
+          if (notePath) {
+            // Arrow stem formation animation
+            handover.to(
+              notePath,
+              { strokeDashoffset: 0, duration: noteDur * 0.35, ease: "power1.out" },
+              noteStart + noteDur * 0.75,
+            );
+          }
+
+          if (noteHead) {
+            // Arrowhead formation animation
+            handover.to(
+              noteHead,
+              { strokeDashoffset: 0, duration: noteDur * 0.2, ease: "power1.out" },
+              noteStart + noteDur * 1.05,
+            );
+          }
+
+          // The knot is the one hero element that crosses over instead of
+          // leaving: it climbs and shrinks into the place the projects
+          // composition wants it, so the two sections share the same object
+          // rather than one fading out in favour of a second, unrelated one.
+          // The hero's OWN rest position/size (bottom-[30.817%] left-[5.473%],
+          // 34vw) is untouched — this only adds a transform on TOP of it that
+          // is 0/1 (a no-op) until the handover begins.
+          //
+          // This is a FLIP: rather than guessing a px/vh offset and a scale
+          // factor, it measures where the element actually IS
+          // (getBoundingClientRect) and where `[data-project-knot-slot]`
+          // actually is — that slot is Figma's own `knotLeft` node box, placed
+          // in ProjectCard.tsx's percentage system — and computes the exact
+          // translate + uniform scale that carries one onto the other. The
+          // scale is uniform (min of the two axis ratios) so a square knot
+          // going into a non-square Figma box is fitted and centred within it
+          // rather than squashed into an ellipse.
+          //
+          // Both rects are read fresh via function-based tween values, not
+          // captured once here — `invalidateOnRefresh` on the ScrollTrigger
+          // (below) re-invokes them on resize, which is what keeps this
+          // correct across breakpoints where the stage, the knot's 34vw size,
+          // and the destination box all change independently.
+          const knotEl =
+            scope.current?.querySelector<HTMLElement>("[data-hero-knot]");
+          const knotSlot = scope.current?.querySelector<HTMLElement>(
+            "[data-project-knot-slot]",
+          );
+          if (knotEl && knotSlot) {
+            const knotDelta = () => {
+              const start = knotEl.getBoundingClientRect();
+              const end = knotSlot.getBoundingClientRect();
+              return {
+                x: end.left + end.width / 2 - (start.left + start.width/2),
+                y: end.top + end.height / 2 - (start.top + start.height / 2),
+                scale: Math.min(
+                  end.width / start.width,
+                  end.height / start.height,
+                ),
+              };
+            };
+            handover.fromTo(
+              knotEl,
+              { x: 0, y: 0, scale: 1 },
+              {
+                x: () => knotDelta().x,
+                y: () => knotDelta().y,
+                scale: () => knotDelta().scale,
+                ease: "none",
+                duration: HANDOVER_REEL_START + HANDOVER_VIDEO_DURATION,
+              },
+              0,
+            );
+          }
+
+          // The corner scribble draws itself while the card rises. What is
+          // being scrubbed is the MASK brush inside CardShapeDraw — the
+          // artwork is an outlined stroke with no stroke of its own to dash,
+          // so a recovered centerline sweeps across it instead (see that
+          // component). Same position and duration as the rise above, so the
+          // mark is complete at the exact frame the card lands, whatever the
+          // runway length.
+          //
+          // The length is measured here rather than hardcoded because it is in
+          // the SVG's own user units — resolution-independent, so this survives
+          // any resize without recomputing.
+          const shapePath =
+            scope.current?.querySelector<SVGPathElement>("[data-shape-draw]");
+          if (shapePath) {
+            const shapeLen = shapePath.getTotalLength();
+            gsap.set(shapePath, { strokeDasharray: shapeLen });
+            handover.fromTo(
+              shapePath,
+              { strokeDashoffset: shapeLen },
+              {
+                strokeDashoffset: 0,
+                ease: "none",
+                duration: HANDOVER_VIDEO_DURATION,
+              },
+              HANDOVER_REEL_START,
+            );
+          }
+
+          if (navLinksEl) {
+            // Fade out the navbar links (Why us?, Plans, Services, Work) on scroll to Projects
+            handover.to(
+              navLinksEl,
+              { autoAlpha: 0, ease: "none", duration: 0.35 },
+              0,
+            );
+          }
+
+          // Bottom-right torus knot in the projects section — slides in
+          // diagonally from below the bottom-right corner, then reveals its drop-shadow glow.
+          const projectKnot = scope.current?.querySelector<HTMLElement>(
+            "[data-project-knot]",
+          );
+          if (projectKnot) {
+            gsap.set(projectKnot, {
+              autoAlpha: 0.2,
+              x: 200,
+              y: 180,
+              filter:
+                "blur(3px) drop-shadow(35px 15px 30px rgba(84, 180, 65, 0)) drop-shadow(70px 25px 45px rgba(84, 180, 65, 0))",
+            });
+            handover.to(
+              projectKnot,
+              {
+                x: 0,
+                y: 0,
+                ease: "power2.out",
+                duration: HANDOVER_VIDEO_DURATION * 1.3,
+              },
+              HANDOVER_REEL_START,
+            );
+            // Apply the 0.45 drop shadow glow only when the onLoad landing animation is done
+            handover.to(
+              projectKnot,
+              {
+                filter:
+                  "blur(3px) drop-shadow(35px 15px 30px rgba(84, 180, 65, 0.45)) drop-shadow(70px 25px 45px rgba(84, 180, 65, 0))",
+                ease: "power1.out",
+                duration: HANDOVER_VIDEO_DURATION * 0.4,
+              },
+              HANDOVER_REEL_START + HANDOVER_VIDEO_DURATION * 0.9,
+            );
+          }
+
+          // ---- Project-to-project slide changes -------------------------
+          //
+          // Everything above is the handover; from here the composition is
+          // parked and the four projects cycle through it.
+          //
+          // The turn is a HALF-FLIP SWAP rather than a two-faced card: the
+          // group rotates 0 -> 90deg (edge-on, so nothing is visible), the
+          // content is swapped at that instant, then it rotates -90 -> 0deg
+          // back to facing. Rotation is monotonic the whole way, so it reads as
+          // one continuous 180deg turn — but only ONE slide is ever in the DOM,
+          // which avoids the real trap of the two-faced approach: with
+          // `preserve-3d`, `backface-visibility` has to be managed per element,
+          // and the pills sit at their own Z depths, so a back face would need
+          // its own mirrored copy of every layer just to stay hidden.
+          //
+          // Scroll-per-timeline-unit is held constant by deriving these
+          // durations from the handover's own measured length. `handoverDur` is
+          // read BEFORE any flip is added, or it would include them.
+          const handoverDur = handover.duration();
+          const unitPerSvh = handoverDur / HANDOVER_RUNWAY_SVH;
+          const slideHold = SLIDE_HOLD_SVH * unitPerSvh;
+          const slideFlip = SLIDE_FLIP_SVH * unitPerSvh;
+          for (let i = 0; i < SLIDE_TRANSITIONS; i++) {
+            const flipStart =
+              handoverDur + i * (slideHold + slideFlip) + slideHold;
+            const flipMid = flipStart + slideFlip / 2;
+            // Recorded even when the element is missing, so the counter and the
+            // slide content still advance if the flip itself cannot run.
+            flipMidpoints.push(flipMid);
+
+            if (!flipEl) continue;
+
+            // `immediateRender: false` on BOTH halves is load-bearing. fromTo
+            // defaults to rendering its `from` state the moment it is created,
+            // which for the second half would slam the card to -90deg at build
+            // time and leave the whole section edge-on before a single pixel is
+            // scrolled.
+            handover.fromTo(
+              flipEl,
+              { rotateY: 0 },
+              {
+                rotateY: 90,
+                ease: "none",
+                duration: slideFlip / 2,
+                immediateRender: false,
+              },
+              flipStart,
+            );
+            handover.fromTo(
+              flipEl,
+              { rotateY: -90 },
+              {
+                rotateY: 0,
+                ease: "none",
+                duration: slideFlip / 2,
+                immediateRender: false,
+              },
+              flipMid,
+            );
+
+            // Re-draw the scribble shape on each slide change: reset to fully
+            // hidden at the flip midpoint (content has just swapped) and draw
+            // during the second half of the flip so the new project's mark
+            // reveals alongside the card turning back to face the viewer.
+            if (shapePath) {
+              const shapeLen = shapePath.getTotalLength();
+              handover.fromTo(
+                shapePath,
+                { strokeDashoffset: shapeLen },
+                {
+                  strokeDashoffset: 0,
+                  ease: "power1.inOut",
+                  duration: slideFlip / 2,
+                  immediateRender: false,
+                },
+                flipMid,
+              );
+            }
+
+            // Re-animate the hand-written note text & its arrow on each slide change:
+            // 1) Fast back-animation during flip-out (flipStart -> flipMid):
+            //    Arrowhead removes first, stem retracts, note text un-tilts & fades out.
+            if (noteHead && noteHeadLen) {
+              handover.to(
+                noteHead,
+                {
+                  strokeDashoffset: noteHeadLen,
+                  duration: slideFlip * 0.08,
+                  ease: "power1.in",
+                },
+                flipStart,
+              );
+            }
+
+            if (notePath && notePathLen) {
+              handover.to(
+                notePath,
+                {
+                  strokeDashoffset: notePathLen,
+                  duration: slideFlip * 0.16,
+                  ease: "power1.in",
+                },
+                flipStart + slideFlip * 0.05,
+              );
+            }
+
+            if (noteText) {
+              handover.to(
+                noteText,
+                {
+                  autoAlpha: 0,
+                  rotation: 0,
+                  duration: slideFlip * 0.2,
+                  ease: "power1.in",
+                },
+                flipStart,
+              );
+            }
+
+            if (noteSvg) {
+              handover.to(
+                noteSvg,
+                {
+                  autoAlpha: 0,
+                  duration: slideFlip * 0.15,
+                  ease: "power1.in",
+                },
+                flipStart,
+              );
+            }
+
+            // 2) Reveal sequence for new project (from flipMid as card turns in):
+            //    a. Text fades in straight (rotation: 0) with project's notePivot transformOrigin
+            //    b. Text tilts to project's noteRotation
+            //    c. Arrow stem & head draw
+            const nextProj = PROJECTS[i + 1] || PROJECTS[0];
+            const nextPivot =
+              nextProj.notePivot === "right"
+                ? "100% 50%"
+                : nextProj.notePivot === "left"
+                ? "0% 50%"
+                : nextProj.notePivot ?? "0% 50%";
+            const nextRotation = nextProj.noteRotation ?? NOTE_FALL_TILT;
+
+            if (noteText) {
+              // Set transformOrigin and reset straight rotation at flipMid
+              handover.set(
+                noteText,
+                {
+                  transformOrigin: nextPivot,
+                  rotation: 0,
+                  autoAlpha: 0,
+                },
+                flipMid,
+              );
+
+              // Step A: Fade in straight (rotation: 0) while card turns in
+              handover.to(
+                noteText,
+                {
+                  autoAlpha: 0.8,
+                  rotation: 0,
+                  ease: "none",
+                  duration: slideFlip * 0.18,
+                },
+                flipMid,
+              );
+
+              // Step B: Tilt text to new project angle as card finishes turning in
+              handover.to(
+                noteText,
+                {
+                  rotation: nextRotation,
+                  ease: "power1.out",
+                  duration: slideFlip * 0.17,
+                },
+                flipMid + slideFlip * 0.18,
+              );
+            }
+
+            if (noteSvg) {
+              handover.set(noteSvg, { autoAlpha: 0 }, flipMid);
+              handover.to(
+                noteSvg,
+                {
+                  autoAlpha: 1,
+                  duration: slideFlip * 0.08,
+                },
+                flipMid + slideFlip * 0.2,
+              );
+            }
+
+            if (notePath && notePathLen) {
+              handover.to(
+                notePath,
+                {
+                  strokeDashoffset: 0,
+                  ease: "power1.out",
+                  duration: slideFlip * 0.18,
+                },
+                flipMid + slideFlip * 0.2,
+              );
+            }
+
+            if (noteHead && noteHeadLen) {
+              handover.to(
+                noteHead,
+                {
+                  strokeDashoffset: 0,
+                  ease: "power1.out",
+                  duration: slideFlip * 0.1,
+                },
+                flipMid + slideFlip * 0.38,
+              );
+            }
+          }
+
+          // Tail: nothing animates, the last slide simply holds. Added as an
+          // empty span so the runway's final stretch maps to real timeline
+          // time — without it the scrub would compress the whole sequence into
+          // the earlier part of the scroll and the last project would flash past.
+          handover.to({}, { duration: SLIDE_TAIL_SVH * unitPerSvh });
+
+          // Now that every tween exists, publish the length onUpdate converts
+          // progress against.
+          timelineTotal = handover.duration();
 
           // §9 — `prefers-reduced-motion`: render the rest state immediately and
           // run no sequence at all.
           if (reduced) {
+            if (navLinksEl) gsap.set(navLinksEl, { autoAlpha: 1 });
+            if (projectKnot)
+              gsap.set(projectKnot, {
+                autoAlpha: 0.2,
+                x: 0,
+                y: 0,
+                filter:
+                  "blur(3px) drop-shadow(35px 15px 30px rgba(84, 180, 65, 0.45)) drop-shadow(70px 25px 45px rgba(84, 180, 65, 0))",
+              });
+            if (noteText)
+              gsap.set(noteText, { autoAlpha: 0.8, y: 0, rotation: 4 });
+            if (noteSvg) gsap.set(noteSvg, { autoAlpha: 1 });
+            if (notePath) {
+              gsap.set(notePath, {
+                strokeDasharray: "none",
+                strokeDashoffset: 0,
+                autoAlpha: 0.8,
+              });
+            }
+            if (noteHead) {
+              gsap.set(noteHead, {
+                strokeDasharray: "none",
+                strokeDashoffset: 0,
+                autoAlpha: 0.8,
+              });
+            }
             gsap.set(wordEls, { autoAlpha: 1, y: 0 });
             // rotation 0 leaves the CSS tilt showing on its own — the rest state
             gsap.set(introFadeEls, { autoAlpha: 1, y: 0, rotation: 0 });
@@ -1320,8 +1962,8 @@ export function Hero() {
         duration: CURSOR.releaseDur,
         ease: "back.out(2)",
       })
-      // 7. leaves for its parked spot — and only once it arrives does the arrow
-      //    sweep round to its resting angle, handing over to cursor tracking
+      // 7. leaves for its parked spot — arrow sweeps round to its resting
+      //    angle simultaneously with the tag's movement
       .to(
         abhayEl,
         {
@@ -1329,15 +1971,11 @@ export function Hero() {
           y: 0,
           duration: CURSOR.parkDur,
           ease: "power3.out",
+          onStart: () => {
+            startReturnToDefaultAnimation(CURSOR.parkDur * 1000);
+          },
           onComplete: () => {
-            startReturnToDefaultAnimation(CURSOR.arrowSettleMs);
-            // Hand the arrow over to the pointer only after that closing sweep
-            // has finished, not the instant the tag parks — the sweep is still
-            // driving the angle for arrowSettleMs, and letting tracking in
-            // early would leave both writing it on the same frame.
-            readyTimer = setTimeout(() => {
-              abhayReadyRef.current = true;
-            }, CURSOR.arrowSettleMs);
+            abhayReadyRef.current = true;
           },
         },
         `+=${CURSOR.parkGap}`,
@@ -1410,15 +2048,26 @@ export function Hero() {
   }, [revealed, startReturnToDefaultAnimation, motionLeadShift]);
 
   /**
-   * Lands on the hero's bottom edge, which is the top of whatever section
-   * follows — measured rather than assumed, so it does not depend on the hero
-   * being exactly one viewport tall or on the next section's markup.
+   * Scrolls smoothly to the Projects section (where the hero text has faded out
+   * and the first project video card has landed and settled flat on screen).
+   * Driven by GSAP over 1.4s for a slow, cinematic transition.
    */
   const scrollToNextSection = () => {
-    if (!scope.current) return;
-    window.scrollTo({
-      top: scope.current.getBoundingClientRect().bottom + window.scrollY,
-      behavior: "smooth",
+    const el = runwayRef.current ?? scope.current;
+    if (!el) return;
+    const runwayTop = el.getBoundingClientRect().top + window.scrollY;
+    // Scroll to the start of the Projects section (after the handover transition)
+    const targetTop =
+      runwayTop + window.innerHeight * (HANDOVER_RUNWAY_SVH / 100);
+
+    const scrollObj = { y: window.scrollY };
+    gsap.to(scrollObj, {
+      y: targetTop,
+      duration: 1.4,
+      ease: "power2.inOut",
+      onUpdate: () => {
+        window.scrollTo(0, scrollObj.y);
+      },
     });
   };
 
@@ -1454,67 +2103,60 @@ export function Hero() {
   };
 
   return (
-    <section
-      ref={scope}
-      id="top"
-      className="relative flex min-h-svh flex-col justify-center overflow-hidden px-5"
+    // Scroll runway. The stage inside is sticky, so this wrapper's extra height
+    // is what the handover is scrubbed against: the viewport holds still on the
+    // hero while the page scrolls through it, and the swap happens in place.
+    // HANDOVER_RUNWAY_SVH of travel past the first screenful — raise it to make
+    // the transition feel longer, lower it to make it snappier.
+    // Height is an inline style, not a Tailwind class: the value is computed,
+    // and Tailwind's scanner only sees literal class strings — an interpolated
+    // `h-[...]` would compile to nothing at all.
+    <div
+      ref={runwayRef}
+      className="relative"
+      style={{
+        height: `${100 + HANDOVER_RUNWAY_SVH + SLIDES_RUNWAY_SVH}svh`,
+      }}
     >
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div
-          aria-hidden
-          className="absolute inset-0 bg-[url('/bg.svg')] bg-cover bg-center"
-        />
-        {/* Slowly rotating trefoil knot, lower-left — the design's own flat
-            render, spun in-plane by CSS (see torus-knot-flat.tsx for why that
-            is motion-identical to the 3D mesh it replaced, and for the
-            left-heavy gradient blur). Sits above the dot grid but below the
-            headline; softened so it reads as ambient depth. */}
-        {/* Size and position are derived from the Figma "Main" frame rather
-            than eyeballed. Node 1:19093 places a 431.012x346.207 rect, rotated
-            -8.47284deg, at (-145, 460.505) in 1440x810. Inside it sits the
-            201x200 render whose ink occupies 147x158px, so the knot actually
-            draws at 315.2x273.5px with its centre — after the rotation — at
-            (78.81, 665.68). That is the 5.473% / 17.817% below.
+      <section
+        ref={scope}
+        id="top"
+        className="sticky top-0 flex min-h-svh flex-col justify-center overflow-hidden px-5"
+      >
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          <div
+            aria-hidden
+            className="absolute inset-0 bg-[url('/bg.svg')] bg-cover bg-center"
+          />
+          <div data-hero-dots className="absolute inset-0">
+            <DotGridZoom
+              gap={30}
+              baseSize={3}
+              maxSize={18}
+              proximity={130}
+              color="#D8D8D8"
+              activeColor="#FAFAFA"
+            />
+          </div>
 
-            The box is anchored by its CENTRE, not a corner. The knot renders
-            centred in the canvas with camera margin around it, so centre
-            anchoring is what makes size and position independent: change the
-            clamp and it grows in place rather than crawling toward a corner.
-            34vw puts the rendered ink at ~316x303px against the design's
-            315.2x273.5 — the width is essentially exact.
+          <div
+            data-hero-knot
+            className="pointer-events-none absolute bottom-[0%] left-[5.5%] hidden h-[clamp(21rem,34vw,127.5rem)] w-[clamp(21rem,34vw,127.5rem)] -translate-x-1/2 translate-y-1/2 sm:block"
+            style={{
+              opacity: 0.17,
+              filter:
+                "blur(3px) drop-shadow(35px 15px 30px rgba(84, 180, 65, 0.45)) drop-shadow(70px 25px 45px rgba(84, 180, 65, 0))",
+              WebkitMaskImage:
+                "linear-gradient(to left, black 0%, rgba(0,0,0,0.85) 35%, rgba(0,0,0,0.4) 75%, transparent 100%)",
+              maskImage:
+                "linear-gradient(to left, black 0%, rgba(0,0,0,0.85) 35%, rgba(0,0,0,0.4) 75%, transparent 100%)",
+            }}
+          >
+            <TorusKnotFlat className="h-full w-full" />
+          </div>
+        </div>
 
-            The cap is 34vw measured at 6000px, the same viewport the headline
-            and the block's max-width cap at, so all three stop growing together
-            and the knot holds its 34% share of the width the whole way up. It
-            was 50rem, which 34vw reached at 2353px — from there the knot was
-            frozen while everything around it kept scaling, down to 18% of the
-            viewport by 4400px and 13% by 6000px.
-
-            The one thing NOT reproduced is that the design scales that square
-            201x200 render into a 431x346 box, stretching it 1.2388x
-            horizontally. Matching the width therefore leaves this ~11% taller
-            than the design. Reproducing the squash would mean fighting the
-            camera's aspect to distort a knot on purpose, so the geometry is
-            left true; that difference is the whole of the height gap.
-
-            Blur lives inside the component now (a left-heavy gradient, 7px to
-            1.5px, rather than the old uniform 2.5px), so there is none here.
-            The static -8.473deg from the design is gone too: under a
-            continuous spin a fixed base angle is only a phase offset, i.e.
-            invisible. Opacity 0.15 is measured, not the raw 0.13 fill-opacity
-            — it matches the design's peak green delta of ~13. */}
-        <TorusKnotFlat className="pointer-events-none absolute bottom-[30.817%] left-[5.473%] hidden h-[clamp(21rem,34vw,127.5rem)] w-[clamp(21rem,34vw,127.5rem)] -translate-x-1/2 translate-y-1/2 opacity-[0.15] sm:block" />
-
-        <DotGridZoom
-          gap={30}
-          baseSize={3}
-          maxSize={18}
-          proximity={130}
-          color="#D8D8D8"
-        />
-      </div>
-
-      {/* The max-width cap has to reach the same viewport width as the
+        {/* The max-width cap has to reach the same viewport width as the
           headline's font cap, or the two stop moving together. 68vw hit the old
           187rem (2992px) at 4400px, while the type carries on to 16.875rem at
           6000px — across that stretch the block was frozen while the words kept
@@ -1522,48 +2164,48 @@ export function Hero() {
           255rem is 68vw at 6000px, so both cap together and the ratio holds
           from there on. Below 4400px the cap never bound, so nothing there
           changes. Keep these two in step if either is retuned. */}
-      <div
-        data-hero-inner
-        className="relative mx-auto flex w-full max-w-7xl min-[1440px]:max-w-[clamp(90rem,68vw,255rem)] flex-col items-center text-center px-0 sm:px-5 2xl:px-0"
-      >
-        {/* "for socials, apps..." tag + curved arrow, pointing into the headline */}
-        <div className="absolute top-3 hidden -rotate-9 min-[1024px]:block origin-top-left min-[1024px]:left-[calc(50%-27rem)] min-[1024px]:scale-90 min-[1280px]:left-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:left-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:left-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:left-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:left-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:left-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:left-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:left-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:left-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:left-[calc(50%-108rem)] min-[4400px]:scale-295 min-[5120px]:left-[calc(50%-126rem)] min-[5120px]:scale-345 min-[6000px]:left-[calc(50%-147rem)] min-[6000px]:scale-400">
-          <span
-            ref={socialsTagRef}
-            className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs text-[#4F6156]"
-          >
-            For Socials, Apps, Websites &amp; Products
-          </span>
+        <div
+          data-hero-inner
+          className="relative mx-auto flex w-full max-w-7xl min-[1440px]:max-w-[clamp(90rem,68vw,255rem)] flex-col items-center text-center px-0 sm:px-5 2xl:px-0"
+        >
+          {/* "for socials, apps..." tag + curved arrow, pointing into the headline */}
+          <div className="absolute top-3 hidden -rotate-9 min-[1024px]:block origin-top-left min-[1024px]:left-[calc(50%-27rem)] min-[1024px]:scale-90 min-[1280px]:left-[calc(50%-33rem)] min-[1280px]:scale-100 min-[1440px]:left-[calc(50%-38rem)] min-[1440px]:scale-110 min-[1600px]:left-[calc(50%-45rem)] min-[1600px]:scale-125 min-[1920px]:left-[calc(50%-48rem)] min-[1920px]:scale-135 min-[2120px]:left-[calc(50%-55rem)] min-[2120px]:scale-140 min-[2400px]:left-[calc(50%-60rem)] min-[2400px]:scale-170 min-[2800px]:left-[calc(50%-70rem)] min-[2800px]:scale-195 min-[3300px]:left-[calc(50%-82rem)] min-[3300px]:scale-230 min-[3840px]:left-[calc(50%-95rem)] min-[3840px]:scale-260 min-[4400px]:left-[calc(50%-108rem)] min-[4400px]:scale-295 min-[5120px]:left-[calc(50%-126rem)] min-[5120px]:scale-345 min-[6000px]:left-[calc(50%-147rem)] min-[6000px]:scale-400">
+            <span
+              ref={socialsTagRef}
+              className="inline-block rounded-full bg-[#F5F5F5] px-4 py-1.5 text-xs text-[#4F6156]"
+            >
+              For Socials, Apps, Websites &amp; Products
+            </span>
 
-          <svg
-            viewBox="0 0 70 48"
-            fill="none"
-            aria-hidden
-            className="ml-24 mt-1 w-20 text-black"
-          >
-            <path
-              ref={socialsArrowPathRef}
-              d="M0.484375 0.125488C3.98438 13.6255 38.4844 39.6255 69.9844 39.6255"
-              stroke="currentColor"
-              strokeWidth="1"
-              strokeLinecap="round"
-              opacity="1"
-            />
-            <g transform="translate(56.624, 28.868)">
+            <svg
+              viewBox="0 0 70 48"
+              fill="none"
+              aria-hidden
+              className="ml-24 mt-1 w-20 text-black"
+            >
               <path
-                ref={socialsArrowHeadRef}
-                d="M2.87622 0.257233C4.37622 2.75723 9.87622 9.75723 13.3762 10.7572C14.8762 11.1858 3.87622 13.7572 0.376221 17.7572"
+                ref={socialsArrowPathRef}
+                d="M0.484375 0.125488C3.98438 13.6255 38.4844 39.6255 69.9844 39.6255"
                 stroke="currentColor"
                 strokeWidth="1"
                 strokeLinecap="round"
-                strokeLinejoin="round"
                 opacity="1"
               />
-            </g>
-          </svg>
-        </div>
+              <g transform="translate(56.624, 28.868)">
+                <path
+                  ref={socialsArrowHeadRef}
+                  d="M2.87622 0.257233C4.37622 2.75723 9.87622 9.75723 13.3762 10.7572C14.8762 11.1858 3.87622 13.7572 0.376221 17.7572"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="1"
+                />
+              </g>
+            </svg>
+          </div>
 
-        {/* hand-written aside, top right.
+          {/* hand-written aside, top right.
 
             Below 2800 is derived from the 2800 step rather than eyeballed:
             solving that pair against the headline's font size gives
@@ -1572,44 +2214,44 @@ export function Hero() {
             size. 2800 and up are left exactly as set. The font is flat at 56px
             below 1244px (the clamp's floor), which is why 1024 and 1280 barely
             differ — and why 1280 needs no `top` of its own. */}
-        <div
-          ref={asideTagRef}
-          className="absolute hidden text-right min-[1024px]:block min-[1024px]:right-[calc(50%-29rem)] min-[1024px]:-top-0 min-[1280px]:right-[calc(50%-30rem)] min-[1440px]:right-[calc(50%-33rem)] min-[1440px]:-top-10 min-[1600px]:right-[calc(50%-37rem)] min-[1600px]:-top-11 min-[1920px]:right-[calc(50%-42rem)] min-[1920px]:-top-14 min-[2120px]:right-[calc(50%-49rem)] min-[2120px]:-top-15 min-[2400px]:right-[calc(50%-56rem)] min-[2400px]:-top-17 min-[2800px]:right-[calc(50%-65rem)] min-[2800px]:-top-20 min-[3300px]:right-[calc(50%-80rem)] min-[3300px]:-top-27 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:-top-30 min-[4400px]:right-[calc(50%-98rem)] min-[4400px]:-top-38 min-[5120px]:right-[calc(50%-100rem)] min-[5120px]:-top-40 min-[6000px]:right-[calc(50%-130rem)] min-[6000px]:-top-45"
-        >
-          <div className="rotate-10 origin-top-right min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[1920px]:scale-135 min-[2120px]:scale-140 min-[2400px]:scale-170 min-[2800px]:scale-195 min-[3300px]:scale-230 min-[3840px]:scale-260 min-[4400px]:scale-295 min-[5120px]:scale-345 min-[6000px]:scale-400 w-48 min-[1280px]:w-48 min-[1440px]:w-46 min-[1600px]:w-46 min-[1920px]:w-46 min-[2400px]:w-46 min-[2800px]:w-46 min-[3300px]:w-46 min-[3840px]:w-46 min-[4400px]:w-46">
-            <p className="font-kalam text-xs sm:text-sm min-[1280px]:text-base leading-snug text-black/60  [text-wrap:balance]">
-              We give every project the love <br />
-              and affection it deserves :)
-            </p>
-            <svg
-              viewBox="0 0 113 83"
-              fill="none"
-              aria-hidden
-              className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-black"
-            >
-              <path
-                ref={asideScribblePathRef}
-                opacity="0.7"
-                d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
-                stroke="currentColor"
-                strokeWidth="1"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
+          <div
+            ref={asideTagRef}
+            className="absolute hidden text-right min-[1024px]:block min-[1024px]:right-[calc(50%-29rem)] min-[1024px]:-top-0 min-[1280px]:right-[calc(50%-30rem)] min-[1440px]:right-[calc(50%-33rem)] min-[1440px]:-top-10 min-[1600px]:right-[calc(50%-37rem)] min-[1600px]:-top-11 min-[1920px]:right-[calc(50%-42rem)] min-[1920px]:-top-14 min-[2120px]:right-[calc(50%-49rem)] min-[2120px]:-top-15 min-[2400px]:right-[calc(50%-56rem)] min-[2400px]:-top-17 min-[2800px]:right-[calc(50%-65rem)] min-[2800px]:-top-20 min-[3300px]:right-[calc(50%-80rem)] min-[3300px]:-top-27 min-[3840px]:right-[calc(50%-95rem)] min-[3840px]:-top-30 min-[4400px]:right-[calc(50%-98rem)] min-[4400px]:-top-38 min-[5120px]:right-[calc(50%-100rem)] min-[5120px]:-top-40 min-[6000px]:right-[calc(50%-130rem)] min-[6000px]:-top-45"
+          >
+            <div className="rotate-10 origin-top-right min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[1920px]:scale-135 min-[2120px]:scale-140 min-[2400px]:scale-170 min-[2800px]:scale-195 min-[3300px]:scale-230 min-[3840px]:scale-260 min-[4400px]:scale-295 min-[5120px]:scale-345 min-[6000px]:scale-400 w-48 min-[1280px]:w-48 min-[1440px]:w-46 min-[1600px]:w-46 min-[1920px]:w-46 min-[2400px]:w-46 min-[2800px]:w-46 min-[3300px]:w-46 min-[3840px]:w-46 min-[4400px]:w-46">
+              <p className="font-kalam text-xs sm:text-sm min-[1280px]:text-base leading-snug text-black/60  [text-wrap:balance]">
+                We give every project the love <br />
+                and affection it deserves :)
+              </p>
+              <svg
+                viewBox="0 0 113 83"
+                fill="none"
+                aria-hidden
+                className="-ml-3 -mt-3 w-28 min-[1440px]:w-34 -rotate-10 text-black"
+              >
+                <path
+                  ref={asideScribblePathRef}
+                  opacity="0.6"
+                  d="M19.6048 0.5C15.6048 0.5 -5.39516 5 2.10484 11.5C9.60484 18 108.105 33 111.605 37.5C115.105 42 44.1055 23.5 39.1055 24.5C34.1055 25.5 70.1055 33.5 75.6055 37.5C81.1055 41.5 51.1055 38 53.6055 44C56.1055 50 112.105 62 96.1055 82"
+                  stroke="currentColor"
+                  strokeWidth="1"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </div>
           </div>
-        </div>
 
-        {/* mobile/tablet stand-in for the lg-only floating tag — keeps content parity below lg */}
-        <span
-          data-hero-fade
-          data-intro-fade
-          className="mt-16 mb-5 inline-block -rotate-2 rounded-full bg-[#F5F5F5] px-3.5 py-1.5 text-[11px] font-medium text-[#4F6156] sm:text-xs lg:hidden"
-        >
-          For Socials, Apps, Websites &amp; Products
-        </span>
+          {/* mobile/tablet stand-in for the lg-only floating tag — keeps content parity below lg */}
+          <span
+            data-hero-fade
+            data-intro-fade
+            className="mt-16 mb-5 inline-block -rotate-2 rounded-full bg-[#F5F5F5] px-3.5 py-1.5 text-[11px] font-medium text-[#4F6156] sm:text-xs lg:hidden"
+          >
+            For Socials, Apps, Websites &amp; Products
+          </span>
 
-        {/* Figma "Main": 65px leading on 63.549px type, and the words that are
+          {/* Figma "Main": 65px leading on 63.549px type, and the words that are
             not the deep green are plain black rather than `--ink`.
 
             The lg cap carries the size past 4400px. At 12.4rem (198.4px) the
@@ -1624,88 +2266,92 @@ export function Hero() {
             font-size they lose to the `lg:` rule that is still matching, and the
             step would silently do nothing. Other properties here can use min-[]
             freely because nothing named competes for them. */}
-        <h1 className="mt-3 font-heading font-normal leading-[1.023] tracking-normal text-black lg:mt-16 text-[clamp(1.5rem,7vw,2.5rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,4.5vw,16.875rem)]">
-          <span className="block">
-            {words([
-              {
-                text: "Retention",
-                name: "retention",
-                className: `font-extrabold ${HEADLINE_GREEN}`,
-              },
-              { text: "Driven", name: "driven", className: "font-medium" },
-            ])}
-          </span>
-
-          <span ref={line2Ref} className="relative block">
-            <span
-              ref={motionGroupRef}
-              className="group/cta relative inline-flex items-center"
-            >
-              <span className="inline-block transition-transform duration-300 ease-out group-has-[a:hover]/cta:-translate-x-[2.1em]">
-                {words([
-                  { text: "Motion", name: "motion", className: "font-normal" },
-                ])}
-              </span>
-              <motion.a
-                ref={ctaArrowRef}
-                href="#contact"
-                data-fall-item
-                className="group/arrow relative mx-[0.0926em] inline-flex size-[0.88em] -translate-y-[0.05em] shrink-0 items-center justify-center align-middle"
-              >
-                {/* expanding pill background + text — absolutely positioned so it never
-                    affects the surrounding text flow (guarantees "& Design" never moves) */}
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-[#0F2100] border border-[#022C12] pr-[0.74em] transition-[width] duration-300 ease-out group-hover/arrow:w-[3.1em]"
-                >
-                  <span className="mr-3 translate-x-0 whitespace-nowrap text-[0.4em] font-semibold [word-spacing:normal] text-cream opacity-0 transition-all duration-300 ease-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
-                    Book a call
-                  </span>
-                </span>
-
-                <span className="relative z-10 inline-flex size-[0.6em] shrink-0 items-center justify-center rounded-full bg-[#EF7C58] shadow-[0_10px_24px_-6px_rgba(232,115,74,0.6)]">
-                  <svg
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    className="size-[0.38em]"
-                  >
-                    <path
-                      d="M5 12h14M13 6l6 6-6 6"
-                      stroke="var(--cream)"
-                      strokeWidth={2.5}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                </span>
-              </motion.a>
+          <h1 className="mt-3 font-heading font-normal leading-[1.023] tracking-normal text-black lg:mt-16 text-[clamp(1.5rem,7vw,2.5rem)] sm:text-[clamp(2.75rem,7vw,3.75rem)] md:text-[clamp(3.25rem,4.5vw,4.25rem)] lg:text-[clamp(3.5rem,4.5vw,16.875rem)]">
+            <span className="block">
+              {words([
+                {
+                  text: "Retention",
+                  name: "retention",
+                  className: `font-extrabold ${HEADLINE_GREEN}`,
+                },
+                { text: "Driven", name: "driven", className: "font-medium" },
+              ])}
             </span>
-            {/* the only word not set in Archivo — Figma has it in Inter Light */}
-            {words([
-              { text: "&", name: "amp", className: "font-sans font-light" },
-            ])}
-            <span
-              ref={designBoxRef}
-              data-fall-item
-              className="relative mx-[0.0926em] inline-block overflow-visible align-top"
-            >
+
+            <span ref={line2Ref} className="relative block">
               <span
-                ref={designInnerRef}
-                className="relative inline-block pb-[0.08em] -mb-[0.08em] align-top"
+                ref={motionGroupRef}
+                className="group/cta relative inline-flex items-center"
+              >
+                <span className="inline-block transition-transform duration-300 ease-out group-has-[a:hover]/cta:-translate-x-[2.2em]">
+                  {words([
+                    {
+                      text: "Motion",
+                      name: "motion",
+                      className: "font-normal",
+                    },
+                  ])}
+                </span>
+                <motion.a
+                  ref={ctaArrowRef}
+                  href="#contact"
+                  data-fall-item
+                  className="group/arrow relative mx-[0.0926em] inline-flex size-[0.88em] -translate-y-[0.05em] shrink-0 items-center justify-center align-middle"
+                >
+                  {/* expanding pill background + text — absolutely positioned so it never
+                    affects the surrounding text flow (guarantees "& Design" never moves) */}
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute right-0 top-0 z-0 flex h-full w-full items-center justify-end overflow-hidden rounded-full bg-[#0F2100] border border-[#022C12] pr-[0.74em] transition-[width] duration-300 ease-out group-hover/arrow:w-[3.1em]"
+                  >
+                    <span className="mr-3 translate-x-0 whitespace-nowrap text-[0.4em] font-semibold [word-spacing:normal] text-cream opacity-0 transition-all duration-300 ease-out group-hover/arrow:translate-x-0 group-hover/arrow:opacity-100">
+                      Book a call
+                    </span>
+                  </span>
+
+                  <span className="relative z-10 inline-flex size-[0.6em] shrink-0 items-center justify-center rounded-full bg-[#EF7C58] shadow-[0_10px_24px_-6px_rgba(232,115,74,0.6)]">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      className="size-[0.38em]"
+                    >
+                      <path
+                        d="M5 12h14M13 6l6 6-6 6"
+                        stroke="var(--cream)"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                </motion.a>
+              </span>
+              {/* the only word not set in Archivo — Figma has it in Inter Light */}
+              {words([
+                { text: "&", name: "amp", className: "font-sans font-light" },
+              ])}
+              <span
+                ref={designBoxRef}
+                data-fall-item
+                className="relative mx-[0.0926em] inline-block overflow-visible align-top"
               >
                 <span
-                  aria-hidden
-                  className="invisible"
-                  style={{
-                    fontWeight: DESIGN_WEIGHT_DEFAULT,
-                    fontFamily: designFontFamily,
-                  }}
+                  ref={designInnerRef}
+                  className="relative inline-block pb-[0.08em] -mb-[0.08em] align-top"
                 >
-                  Design
-                </span>
+                  <span
+                    aria-hidden
+                    className="invisible"
+                    style={{
+                      fontWeight: DESIGN_WEIGHT_DEFAULT,
+                      fontFamily: designFontFamily,
+                    }}
+                  >
+                    Design
+                  </span>
 
-                <span className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap">
-                  {/* No transition on font-weight. Both the intro's drag and a
+                  <span className="absolute left-1/2 top-0 -translate-x-1/2 whitespace-nowrap">
+                    {/* No transition on font-weight. Both the intro's drag and a
                       hand-drag push a new weight every frame, so a 300ms
                       transition never got to finish one before the next
                       replaced it — the rendered weight trailed the handle by
@@ -1714,19 +2360,19 @@ export function Hero() {
                       with the slider. The frame-by-frame updates ARE the
                       smoothing; the weight is rounded to whole units, and a
                       1-unit step across a 200-750 range is invisible. */}
-                  <span
-                    ref={designWordRef}
-                    data-word="design"
-                    className="inline-block will-change-transform"
-                    style={{
-                      fontWeight: designWeight,
-                      fontFamily: designFontFamily,
-                    }}
-                  >
-                    Design
-                  </span>
+                    <span
+                      ref={designWordRef}
+                      data-word="design"
+                      className="inline-block will-change-transform"
+                      style={{
+                        fontWeight: designWeight,
+                        fontFamily: designFontFamily,
+                      }}
+                    >
+                      Design
+                    </span>
 
-                  {/* Frame and handles live in HERE, not on the outer wrapper,
+                    {/* Frame and handles live in HERE, not on the outer wrapper,
                       so they measure the word rather than the ghost. The ghost
                       is pinned to the resting weight, so anchoring to it left
                       the frame a fixed size while the word thickened out of it;
@@ -1736,137 +2382,138 @@ export function Hero() {
                       is out of flow and the line never reflows. At heavy
                       weights the frame will reach into the neighbouring words
                       and toward the slider rail; that overlap is accepted. */}
-                  <span
-                    aria-hidden
-                    className={`pointer-events-none absolute -top-1 -bottom-1 -left-2 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] min-[1024px]:-right-[0.1em] border border-dashed border-black/50 ${
-                      designSelected ? "opacity-100" : "opacity-0"
-                    }`}
-                  />
-
-                  {/* 4 corner dots marking the selection — centered exactly on
-                      the dashed box's corners. left/right MUST track the frame's
-                      -left/-right above (top/bottom already matched it) or the
-                      dots drift off the corners once x and y diverge. */}
-                  {[
-                    "-top-1 -left-2 min-[1024px]:-top-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 -translate-y-1/2",
-                    "-top-1 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 -translate-y-1/2",
-                    "-bottom-1 -left-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 translate-y-1/2",
-                    "-bottom-1 -right-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 translate-y-1/2",
-                  ].map((pos) => (
                     <span
-                      key={pos}
                       aria-hidden
-                      className={`pointer-events-none absolute ${pos} size-1.5 min-[1024px]:size-[0.075em] min-[1024px]:min-w-[6px] min-[1024px]:min-h-[6px] bg-black ${
+                      className={`pointer-events-none absolute -top-1 -bottom-1 -left-2 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] min-[1024px]:-right-[0.1em] border border-dashed border-black/50 ${
                         designSelected ? "opacity-100" : "opacity-0"
                       }`}
                     />
-                  ))}
-                </span>
-              </span>
 
-              {/* interactive vertical slider — controls "Design"'s font-weight live, within a subtle range */}
-              <span
-                ref={designTrackRef}
-                onPointerDown={(e) => {
-                  if (!designSelected) return;
-                  e.currentTarget.setPointerCapture(e.pointerId);
-                  updateDesignWeightFromPointer(e.clientY);
-                }}
-                onPointerMove={(e) => {
-                  if (!designSelected) return;
-                  if (e.buttons === 1) updateDesignWeightFromPointer(e.clientY);
-                }}
-                // Top/bottom deliberately mirror the dashed selection box's
-                // `-inset-1` / `-inset-[0.05em]` above, so the rail is exactly
-                // as tall as the box it belongs to. The box itself stays wide —
-                // a 1px rail is far too thin to grab, so this keeps a ~14px
-                // pointer target (was 20px) with the line centred inside it.
-                className={`absolute -right-0 min-[1024px]:left-[calc(100%+0.18em)] -top-1 min-[1024px]:-top-[0.05em] -bottom-1 min-[1024px]:-bottom-[0.05em] flex w-5 min-[1024px]:w-[0.3em] min-[1024px]:min-w-[20px] items-center justify-center ${
-                  designSelected
-                    ? "opacity-100 pointer-events-auto cursor-pointer"
-                    : "opacity-0 pointer-events-none"
-                }`}
-              >
-                {/* A hairline, matching the design's plain 1px rule. Held at
+                    {/* 4 corner dots marking the selection — centered exactly on
+                      the dashed box's corners. left/right MUST track the frame's
+                      -left/-right above (top/bottom already matched it) or the
+                      dots drift off the corners once x and y diverge. */}
+                    {[
+                      "-top-1 -left-2 min-[1024px]:-top-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 -translate-y-1/2",
+                      "-top-1 -right-2 min-[1024px]:-top-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 -translate-y-1/2",
+                      "-bottom-1 -left-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-left-[0.1em] -translate-x-1/2 translate-y-1/2",
+                      "-bottom-1 -right-2 min-[1024px]:-bottom-[0.05em] min-[1024px]:-right-[0.1em] translate-x-1/2 translate-y-1/2",
+                    ].map((pos) => (
+                      <span
+                        key={pos}
+                        aria-hidden
+                        className={`pointer-events-none absolute ${pos} size-1.5 min-[1024px]:size-[0.075em] min-[1024px]:min-w-[6px] min-[1024px]:min-h-[6px] bg-black ${
+                          designSelected ? "opacity-100" : "opacity-0"
+                        }`}
+                      />
+                    ))}
+                  </span>
+                </span>
+
+                {/* interactive vertical slider — controls "Design"'s font-weight live, within a subtle range */}
+                <span
+                  ref={designTrackRef}
+                  onPointerDown={(e) => {
+                    if (!designSelected) return;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    updateDesignWeightFromPointer(e.clientY);
+                  }}
+                  onPointerMove={(e) => {
+                    if (!designSelected) return;
+                    if (e.buttons === 1)
+                      updateDesignWeightFromPointer(e.clientY);
+                  }}
+                  // Top/bottom deliberately mirror the dashed selection box's
+                  // `-inset-1` / `-inset-[0.05em]` above, so the rail is exactly
+                  // as tall as the box it belongs to. The box itself stays wide —
+                  // a 1px rail is far too thin to grab, so this keeps a ~14px
+                  // pointer target (was 20px) with the line centred inside it.
+                  className={`absolute -right-0 min-[1024px]:left-[calc(100%+0.18em)] -top-1 min-[1024px]:-top-[0.05em] -bottom-1 min-[1024px]:-bottom-[0.05em] flex w-5 min-[1024px]:w-[0.3em] min-[1024px]:min-w-[20px] items-center justify-center ${
+                    designSelected
+                      ? "opacity-100 pointer-events-auto cursor-pointer"
+                      : "opacity-0 pointer-events-none"
+                  }`}
+                >
+                  {/* A hairline, matching the design's plain 1px rule. Held at
                     1px rather than scaled in em so it stays a line at every
                     breakpoint — the same reason the dashed box beside it uses a
                     1px border. Solid `ink/50` to match that border too; the old
                     sand-to-ink gradient was invisible at this width. */}
-                <span aria-hidden className="h-full w-[2px] bg-black/50" />
-                <span
-                  aria-hidden
-                  // Height raised well past the design's 6.667px (grip is easier
-                  // to see/land a pointer on when it isn't razor-thin); width
-                  // nudged up only slightly to stay a mostly-vertical tick.
-                  className="absolute left-1/2 h-2 w-4 min-[1024px]:h-[0.14em] min-[1024px]:w-[0.262em] min-[1024px]:min-h-[9px] min-[1024px]:min-w-[17px] rounded-md min-[1024px]:rounded-[0.1em] border border-[#175800] border-2 bg-white opacity-100 shadow-sm"
-                  style={{
-                    top: `${
-                      100 -
-                      ((designWeight - DESIGN_WEIGHT_MIN) /
-                        (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN)) *
-                        100
-                    }%`,
-                    transform: "translate(-50%, -50%)",
-                  }}
-                />
-              </span>
-              <span
-                ref={abhayRef}
-                data-fall-item
-                className="absolute top-1/2 hidden -translate-y-1/2 min-[1024px]:block opacity-0 origin-left left-[calc(100%+0.95em)]"
-              >
-                {/* GSAP folds the CSS `scale` property into its own transform on the
-                    wrapper above (leaving `scale: none` inline), so the responsive
-                    scale steps must live on this inner span it never animates. */}
-                <span className="block origin-left min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[2120px]:scale-140 min-[2400px]:scale-155 min-[2800px]:scale-180 min-[3300px]:scale-215 min-[3840px]:scale-245 min-[4400px]:scale-280 min-[5120px]:scale-325 min-[6000px]:scale-380">
+                  <span aria-hidden className="h-full w-[2px] bg-black/50" />
                   <span
                     aria-hidden
-                    data-abhay-arrow
+                    // Height raised well past the design's 6.667px (grip is easier
+                    // to see/land a pointer on when it isn't razor-thin); width
+                    // nudged up only slightly to stay a mostly-vertical tick.
+                    className="absolute left-1/2 h-2 w-4 min-[1024px]:h-[0.14em] min-[1024px]:w-[0.262em] min-[1024px]:min-h-[9px] min-[1024px]:min-w-[17px] rounded-md min-[1024px]:rounded-[0.1em] border border-[#175800] border-2 bg-white opacity-100 shadow-sm"
                     style={{
-                      transform: `translate(-50%, -50%) translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
+                      top: `${
+                        100 -
+                        ((designWeight - DESIGN_WEIGHT_MIN) /
+                          (DESIGN_WEIGHT_MAX - DESIGN_WEIGHT_MIN)) *
+                          100
+                      }%`,
+                      transform: "translate(-50%, -50%)",
                     }}
-                    // No CSS transition in either direction. The chase loop
-                    // eases the angle every frame now, both toward the cursor
-                    // and back to rest, so a transition on top would ease an
-                    // already-eased value — and having it differ per state
-                    // (it was 150ms tracking vs 75ms returning) is exactly what
-                    // made in and out feel like different motions.
-                    className="pointer-events-none absolute left-1/2 top-1/2 size-7.5 min-[1280px]:size-8 min-[1600px]:size-8.5 min-[1920px]:size-9 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)]"
-                  >
-                    <svg
-                      viewBox="0 0 44 40"
-                      className="size-full overflow-visible"
+                  />
+                </span>
+                <span
+                  ref={abhayRef}
+                  data-fall-item
+                  className="absolute top-1/2 hidden -translate-y-1/2 min-[1024px]:block opacity-0 origin-left left-[calc(100%+0.95em)]"
+                >
+                  {/* GSAP folds the CSS `scale` property into its own transform on the
+                    wrapper above (leaving `scale: none` inline), so the responsive
+                    scale steps must live on this inner span it never animates. */}
+                  <span className="block origin-left min-[1024px]:scale-90 min-[1280px]:scale-100 min-[1440px]:scale-110 min-[1600px]:scale-125 min-[2120px]:scale-140 min-[2400px]:scale-155 min-[2800px]:scale-180 min-[3300px]:scale-215 min-[3840px]:scale-245 min-[4400px]:scale-280 min-[5120px]:scale-325 min-[6000px]:scale-380">
+                    <span
+                      aria-hidden
+                      data-abhay-arrow
+                      style={{
+                        transform: `translate(-50%, -50%) translate(${abhayArrowX}px, ${abhayArrowY}px) rotate(${(abhayAngle * 180) / Math.PI}deg)`,
+                      }}
+                      // No CSS transition in either direction. The chase loop
+                      // eases the angle every frame now, both toward the cursor
+                      // and back to rest, so a transition on top would ease an
+                      // already-eased value — and having it differ per state
+                      // (it was 150ms tracking vs 75ms returning) is exactly what
+                      // made in and out feel like different motions.
+                      className="pointer-events-none absolute left-1/2 top-1/2 size-7.5 min-[1280px]:size-8 min-[1600px]:size-8.5 min-[1920px]:size-9 text-[#1e7a00] drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)]"
                     >
-                      <path
-                        d="M35.5 17.9 Q40 20 35.5 22.1 L11 33.7 Q6 36 8.5 31.1 L13.3 21.3 Q14 20 13.3 18.7 L8.5 8.9 Q6 4 11 6.3 Z"
-                        fill="currentColor"
-                        stroke="#FFFFFF"
-                        strokeWidth="7"
-                        paintOrder="stroke"
-                        strokeLinejoin="round"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  </span>
+                      <svg
+                        viewBox="0 0 44 40"
+                        className="size-full overflow-visible"
+                      >
+                        <path
+                          d="M35.5 17.9 Q40 20 35.5 22.1 L11 33.7 Q6 36 8.5 31.1 L13.3 21.3 Q14 20 13.3 18.7 L8.5 8.9 Q6 4 11 6.3 Z"
+                          fill="currentColor"
+                          stroke="#FFFFFF"
+                          strokeWidth="7"
+                          paintOrder="stroke"
+                          strokeLinejoin="round"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </span>
 
-                  <span className="relative flex items-center rounded-full bg-[#1e7a00] px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
-                    Abhay
+                    <span className="relative flex items-center rounded-full bg-[#1e7a00] px-3 py-1 text-xs sm:px-4 sm:py-1.5 sm:text-sm font-medium text-white shadow-[0_8px_20px_-4px_rgba(30,122,0,0.4)]">
+                      Abhay
+                    </span>
                   </span>
                 </span>
               </span>
             </span>
-          </span>
 
-          <span className="block">
-            {words([
-              { text: "for", name: "for", className: "font-light" },
-              {
-                text: "Results",
-                name: "results",
-                className: `font-extrabold ${HEADLINE_GREEN}`,
-              },
-            ])}
-            {/* The downward settle rides HERE, on the slot, not on the badges.
+            <span className="block">
+              {words([
+                { text: "for", name: "for", className: "font-light" },
+                {
+                  text: "Results",
+                  name: "results",
+                  className: `font-extrabold ${HEADLINE_GREEN}`,
+                },
+              ])}
+              {/* The downward settle rides HERE, on the slot, not on the badges.
                 It shares the fan's transition, so widening and descending are
                 one gesture — the drop used to be a separate tween fired by a
                 timer when the fan finished, which read as the pair jumping
@@ -1874,231 +2521,251 @@ export function Hero() {
                 of the badges' own `y`, which the hover lift owns; and the
                 Tailwind -translate-y here survives Framer writing `transform`
                 because v4 emits it as the standalone `translate` property. */}
-            <motion.span
-              data-fall-item
-              className="relative ml-[-0.19em] mr-[-0.16em] inline-block h-[0.95em] -translate-y-[0.101em] align-middle"
-              initial={{ width: `${BADGE.tile * BADGE.slotCollapsed}em`, y: 0 }}
-              animate={
-                revealed
-                  ? {
-                      width: `${BADGE.tile * BADGE.slot}em`,
-                      y: BADGE_DROP_WITH_FAN,
-                    }
-                  : {}
-              }
-              transition={{ width: badgeFan, y: badgeFan }}
-            >
               <motion.span
-                aria-hidden
+                data-fall-item
+                className="relative ml-[-0.19em] mr-[-0.16em] inline-block h-[0.95em] -translate-y-[0.101em] align-middle"
                 initial={{
-                  opacity: 0,
-                  scale: 0.6,
-                  rotate: 0,
-                  x: "0%",
+                  width: `${BADGE.tile * BADGE.slotCollapsed}em`,
+                  y: 0,
                 }}
                 animate={
                   revealed
                     ? {
-                        opacity: 1,
-                        scale: 1,
-                        rotate: BADGE.instagramTilt,
-                        x: BADGE.instagramRest,
-                        y:
-                          hoveredBadge === "instagram"
-                            ? -8
-                            : hoveredBadge === "linkedin"
-                              ? 8
-                              : 0,
-                        zIndex: hoveredBadge === "instagram" ? 30 : 10,
+                        width: `${BADGE.tile * BADGE.slot}em`,
+                        y: BADGE_DROP_WITH_FAN,
                       }
                     : {}
                 }
-                transition={{
-                  opacity: badgeFan,
-                  scale: badgeFan,
-                  rotate: badgeFan,
-                  x: badgeFan,
-                  y: badgeHover,
-                  zIndex: { duration: 0 },
-                }}
-                onMouseEnter={() => setHoveredBadge("instagram")}
-                onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
-                style={{
-                  width: `${BADGE.tile}em`,
-                  height: `${BADGE.tile}em`,
-                }}
+                transition={{ width: badgeFan, y: badgeFan }}
               >
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0"
-                  style={{ rotate: `${-BADGE.instagramTilt}deg` }}
-                >
-                  {" "}
-                  <img
-                    src="/instagram.svg"
-                    alt=""
-                    className="absolute max-w-none"
-                    style={{
-                      width: `${BADGE.tile * BADGE.instagramImgScale}em`,
-                      left: "58%",
-                      top: "50%",
-                      transform: `translate(-${BADGE.instagramTileCentreX}, -${BADGE.instagramTileCentreY})`,
-                    }}
-                  />
-                </span>
-              </motion.span>
-              <motion.span
-                aria-hidden
-                initial={{
-                  rotate: BADGE_ROTATE_KEYFRAMES[0],
-                  x: "0%",
-                }}
-                animate={
-                  revealed
-                    ? {
-                        rotate: BADGE_ROTATE_KEYFRAMES,
-                        x: BADGE.linkedinRest,
-                        y:
-                          hoveredBadge === "linkedin"
-                            ? -8
-                            : hoveredBadge === "instagram"
-                              ? 8
-                              : 0,
-                        zIndex: hoveredBadge === "linkedin" ? 30 : 20,
-                      }
-                    : {}
-                }
-                transition={{
-                  rotate: badgeLinkedinRotate,
-                  // slides out of the stack as the pair fans apart
-                  x: badgeFan,
-                  y: badgeHover,
-                  zIndex: { duration: 0 },
-                }}
-                onMouseEnter={() => setHoveredBadge("linkedin")}
-                onMouseLeave={() => setHoveredBadge(null)}
-                className="absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
-                style={{
-                  width: `${BADGE.tile}em`,
-                  height: `${BADGE.tile}em`,
-                }}
-              >
-                {/* Carries the rise and the fade. Kept off the element above
-                    because that one owns `y` for the hover lift, and the two
-                    would overwrite each other. */}
                 <motion.span
                   aria-hidden
-                  initial={{ opacity: 0, y: BADGE_RISE_FROM }}
-                  animate={revealed ? { opacity: 1, y: "0%" } : {}}
-                  transition={badgeRise}
-                  className="pointer-events-none absolute inset-0"
+                  initial={{
+                    opacity: 0,
+                    scale: 0.6,
+                    rotate: 0,
+                    x: "0%",
+                  }}
+                  animate={
+                    revealed
+                      ? {
+                          opacity: 1,
+                          scale: 1,
+                          rotate: BADGE.instagramTilt,
+                          x: BADGE.instagramRest,
+                          y:
+                            hoveredBadge === "instagram"
+                              ? -8
+                              : hoveredBadge === "linkedin"
+                                ? 8
+                                : 0,
+                          zIndex: hoveredBadge === "instagram" ? 30 : 10,
+                        }
+                      : {}
+                  }
+                  transition={{
+                    opacity: badgeFan,
+                    scale: badgeFan,
+                    rotate: badgeFan,
+                    x: badgeFan,
+                    y: badgeHover,
+                    zIndex: { duration: 0 },
+                  }}
+                  onMouseEnter={() => setHoveredBadge("instagram")}
+                  onMouseLeave={() => setHoveredBadge(null)}
+                  className="absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
+                  style={{
+                    width: `${BADGE.tile}em`,
+                    height: `${BADGE.tile}em`,
+                  }}
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src="/Linkedin-svg.svg"
-                    alt=""
-                    className="absolute max-w-none"
-                    style={{
-                      width: `${BADGE.tile * BADGE.linkedinImgScale}em`,
-                      left: "48%",
-                      top: "50%",
-                      transform: `translate(-${BADGE.linkedinTileCentreX}, -${BADGE.linkedinTileCentreY})`,
-                    }}
-                  />
+                  <span
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0"
+                    style={{ rotate: `${-BADGE.instagramTilt}deg` }}
+                  >
+                    {" "}
+                    <img
+                      src="/instagram.svg"
+                      alt=""
+                      className="absolute max-w-none"
+                      style={{
+                        width: `${BADGE.tile * BADGE.instagramImgScale}em`,
+                        left: "58%",
+                        top: "50%",
+                        transform: `translate(-${BADGE.instagramTileCentreX}, -${BADGE.instagramTileCentreY})`,
+                      }}
+                    />
+                  </span>
+                </motion.span>
+                <motion.span
+                  aria-hidden
+                  initial={{
+                    rotate: BADGE_ROTATE_KEYFRAMES[0],
+                    x: "0%",
+                  }}
+                  animate={
+                    revealed
+                      ? {
+                          rotate: BADGE_ROTATE_KEYFRAMES,
+                          x: BADGE.linkedinRest,
+                          y:
+                            hoveredBadge === "linkedin"
+                              ? -8
+                              : hoveredBadge === "instagram"
+                                ? 8
+                                : 0,
+                          zIndex: hoveredBadge === "linkedin" ? 30 : 20,
+                        }
+                      : {}
+                  }
+                  transition={{
+                    rotate: badgeLinkedinRotate,
+                    // slides out of the stack as the pair fans apart
+                    x: badgeFan,
+                    y: badgeHover,
+                    zIndex: { duration: 0 },
+                  }}
+                  onMouseEnter={() => setHoveredBadge("linkedin")}
+                  onMouseLeave={() => setHoveredBadge(null)}
+                  className="absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 cursor-pointer"
+                  style={{
+                    width: `${BADGE.tile}em`,
+                    height: `${BADGE.tile}em`,
+                  }}
+                >
+                  {/* Carries the rise and the fade. Kept off the element above
+                    because that one owns `y` for the hover lift, and the two
+                    would overwrite each other. */}
+                  <motion.span
+                    aria-hidden
+                    initial={{ opacity: 0, y: BADGE_RISE_FROM }}
+                    animate={revealed ? { opacity: 1, y: "0%" } : {}}
+                    transition={badgeRise}
+                    className="pointer-events-none absolute inset-0"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src="/Linkedin-svg.svg"
+                      alt=""
+                      className="absolute max-w-none"
+                      style={{
+                        width: `${BADGE.tile * BADGE.linkedinImgScale}em`,
+                        left: "48%",
+                        top: "50%",
+                        transform: `translate(-${BADGE.linkedinTileCentreX}, -${BADGE.linkedinTileCentreY})`,
+                      }}
+                    />
+                  </motion.span>
                 </motion.span>
               </motion.span>
-            </motion.span>
-            {words([
-              {
-                text: "Oriented",
-                name: "oriented",
-                className: "font-[500]",
-              },
-            ])}
-          </span>
-
-          <span className="ml-[0.02em] inline-block align-top">
-            <span className="relative inline-block overflow-visible">
-              <span>
-                {words([
-                  {
-                    text: "Founders",
-                    name: "founders",
-                    className: `italic font-semibold ${HEADLINE_GREEN}`,
-                    // punctuation, not a neighbour — the period must butt
-                    // against the word rather than sit a gap away
-                    tight: true,
-                    // the trailing "s" was clipped by this word's own
-                    // overflow-hidden reveal mask — see ITALIC_OVERHANG_EM
-                    italic: true,
-                  },
-                ])}
-              </span>
-              <svg
-                viewBox="0 0 290 10"
-                aria-hidden
-                data-fall-item
-                className="absolute bottom-[-0.1em] left-[-2%] w-[105%] overflow-visible"
-              >
-                <defs>
-                  <clipPath id="underline-clip">
-                    <rect
-                      ref={underlineRef}
-                      x="0"
-                      y="0"
-                      width="290"
-                      height="10"
-                    />
-                  </clipPath>
-                </defs>
-                <image
-                  href="/underline.svg"
-                  width="290"
-                  height="10"
-                  clipPath="url(#underline-clip)"
-                  preserveAspectRatio="none"
-                />
-              </svg>
-            </span>
-            <span>
               {words([
                 {
-                  text: ".",
-                  name: "period",
-                  className: `font-extrabold ${HEADLINE_CORAL} ml-[0.09em]`,
-                  tight: true,
+                  text: "Oriented",
+                  name: "oriented",
+                  className: "font-[500]",
                 },
               ])}
             </span>
-          </span>
-        </h1>
-      </div>
 
-      {/* scroll cue, bottom right — aligned directly under the navbar contact button */}
-      <button
-        type="button"
-        aria-label="Scroll to explore"
-        data-hero-fade
-        onClick={scrollToNextSection}
-        className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-black/90 text-black transition-colors hover:border-black hover:border-white hover:bg-black/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
-      >
-        <svg
-          width="21"
-          height="24"
-          viewBox="0 0 21 24"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
+            <span className="ml-[0.02em] inline-block align-top">
+              <span className="relative inline-block overflow-visible">
+                <span>
+                  {words([
+                    {
+                      text: "Founders",
+                      name: "founders",
+                      className: `italic font-semibold ${HEADLINE_GREEN}`,
+                      // punctuation, not a neighbour — the period must butt
+                      // against the word rather than sit a gap away
+                      tight: true,
+                      // the trailing "s" was clipped by this word's own
+                      // overflow-hidden reveal mask — see ITALIC_OVERHANG_EM
+                      italic: true,
+                    },
+                  ])}
+                </span>
+                <svg
+                  viewBox="0 0 290 10"
+                  aria-hidden
+                  data-fall-item
+                  className="absolute bottom-[-0.1em] left-[-2%] w-[105%] overflow-visible"
+                >
+                  <defs>
+                    <clipPath id="underline-clip">
+                      <rect
+                        ref={underlineRef}
+                        x="0"
+                        y="0"
+                        width="290"
+                        height="10"
+                      />
+                    </clipPath>
+                  </defs>
+                  <image
+                    href="/underline.svg"
+                    width="290"
+                    height="10"
+                    clipPath="url(#underline-clip)"
+                    preserveAspectRatio="none"
+                  />
+                </svg>
+              </span>
+              <span>
+                {words([
+                  {
+                    text: ".",
+                    name: "period",
+                    className: `font-extrabold ${HEADLINE_CORAL} ml-[0.09em]`,
+                    tight: true,
+                  },
+                ])}
+              </span>
+            </span>
+          </h1>
+        </div>
+
+        {/* scroll cue, bottom right — aligned directly under the navbar contact button */}
+        <button
+          type="button"
+          aria-label="Scroll to explore"
+          data-hero-fade
+          onClick={scrollToNextSection}
+          className="absolute bottom-6 right-[clamp(1.5rem,5vw,6rem)] min-[1920px]:right-[clamp(2rem,5vw,8rem)] min-[2400px]:right-[clamp(2.5rem,5vw,10rem)] min-[2800px]:right-[clamp(3rem,5vw,12rem)] min-[3300px]:right-[clamp(3.5rem,5vw,15rem)] min-[3840px]:right-[clamp(4rem,5vw,18rem)] min-[4400px]:right-[clamp(4.5rem,5vw,22rem)] z-20 flex size-12 items-center justify-center rounded-full border border-dashed border-black/90 text-black transition-colors hover:border-black hover:border-white hover:bg-black/90 hover:text-white sm:bottom-8 sm:size-13 md:bottom-10 lg:size-14"
         >
-          <path
-            d="M10.5 1V11.75V22.5M20 14L10.5 22.5L1 14"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-    </section>
+          <svg
+            width="21"
+            height="24"
+            viewBox="0 0 21 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M10.5 1V11.75V22.5M20 14L10.5 22.5L1 14"
+              stroke="currentColor"
+              strokeWidth={2}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+
+        {/* The incoming section, sharing the hero's stage. It sits in the same
+            sticky viewport rather than in a section of its own, which is what
+            lets the navbar, background and knot stay put while only the
+            contents change over. ProjectCard's own [data-project-video] and
+            [data-project-note] groups carry the entrance motion (see the
+            handover timeline above), so this wrapper only has to reveal
+            itself and center the composition. */}
+        <div
+          data-hero-reel
+          aria-hidden
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"
+          style={{ opacity: 0 }}
+        >
+          <ProjectCard project={PROJECTS[activeProject]} index={activeProject} />
+        </div>
+      </section>
+    </div>
   );
 }

@@ -46,30 +46,17 @@ export function TorusKnotFlat({ className }: { className?: string }) {
   return (
     <div className={className} aria-hidden>
       <div className="knot-float relative h-full w-full">
-        {COPIES.map(({ blur, mask }) => (
-          <div
-            key={blur}
-            className="absolute inset-0"
-            style={{ maskImage: mask, WebkitMaskImage: mask }}
-          >
-            {/* object-fill, not contain: the 201x200 raster stretches ~0.5% to
-                fill the square box, invisible at this opacity, and it keeps the
-                ink-centre percentages of the raster equal to percentages of
-                the box, which transform-origin is measured against. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/torus_knot.png"
-              alt=""
-              className="knot-spin absolute h-full w-full object-fill"
-              style={{
-                filter: `blur(${blur})`,
-                transformOrigin: "46.27% 49.75%",
-                left: "3.73%",
-                top: "0.25%",
-              }}
-            />
-          </div>
-        ))}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/torus_knot.png"
+          alt=""
+          className="knot-spin absolute h-full w-full object-fill"
+          style={{
+            transformOrigin: "46.27% 49.75%",
+            left: "3.73%",
+            top: "0.25%",
+          }}
+        />
       </div>
     </div>
   );

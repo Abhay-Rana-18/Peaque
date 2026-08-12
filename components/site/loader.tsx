@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { gsap, cubicBezierEase } from "@/lib/gsap";
-import Lottie from "lottie-react";
-import animationData from "@/public/Loading_opt.lottie/animations/animation.json";
 
 /**
  * Curtain-lift ease from the hero on-load spec (§3): a hard ease-in with a soft
@@ -13,7 +11,7 @@ import animationData from "@/public/Loading_opt.lottie/animations/animation.json
 const CURTAIN_EASE = cubicBezierEase(0.9, 0.02, 0.6, 0.95);
 
 /**
- * Intro loader: displays the Lottie loading animation centered on screen.
+ * Intro loader: displays the Loading.gif animation centered on screen.
  * The animation fades out and the curtain slides up to reveal the site.
  *
  * Fires `peaque:reveal` (and sets `__peaqueIntroDone`) as the curtain *starts*
@@ -25,10 +23,6 @@ export function Loader() {
   const panelRef = useRef<HTMLDivElement>(null);
   const logoRef = useRef<HTMLDivElement>(null);
   const [gone, setGone] = useState(false);
-  // The Lottie keeps drawing every frame even at opacity 0, and it is still
-  // mounted while the curtain lifts and the hero's first words land. Tearing it
-  // down the moment it finishes fading hands the whole cascade a free main
-  // thread instead of making it compete with a full-screen animation.
   const [logoGone, setLogoGone] = useState(false);
 
   useEffect(() => {
@@ -61,7 +55,7 @@ export function Loader() {
       if (cancelled) return;
 
       tl = gsap.timeline();
-      // hold beat for lottie animation, then dismiss loader content and slide up panel
+      // hold beat for loading animation, then dismiss loader content and slide up panel
       tl.to(logoRef.current, {
         autoAlpha: 0,
         duration: 0.35,
@@ -98,18 +92,17 @@ export function Loader() {
   return (
     <div
       ref={panelRef}
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#226800]"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-[#004801]"
     >
       <div
         ref={logoRef}
-        className="w-[80vw] h-[80vw] sm:w-[75vw] sm:h-[75vw] md:w-[55rem] md:h-[55rem] lg:w-[72rem] lg:h-[72rem] xl:w-[85rem] xl:h-[85rem] 2xl:w-[98rem] 2xl:h-[98rem] max-w-[96vw] max-h-[92vh] flex items-center justify-center"
+        className="flex items-center justify-center p-4"
       >
         {!logoGone && (
-          <Lottie
-            animationData={animationData}
-            loop={true}
-            autoplay={true}
-            style={{ width: "100%", height: "100%" }}
+          <img
+            src="/Loading.gif"
+            alt="Loading..."
+            className="h-auto w-[clamp(16rem,24vw,65rem)] max-h-[85vh] object-contain"
           />
         )}
       </div>
