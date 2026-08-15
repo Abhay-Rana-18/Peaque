@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Play, Pause } from "lucide-react";
 import { Reveal } from "./reveal";
 import { ArrowShort } from "./doodles";
@@ -30,7 +30,62 @@ const projects = [
 
 function WorkCard({ src, title, tag }: (typeof projects)[number]) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [playing, setPlaying] = useState(false);
+  const [playing, setPlaying] = useState(true);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let isIntersecting = false;
+    video.muted = true;
+    video.defaultMuted = true;
+
+    const playVideo = () => {
+      if (playing && video.paused && document.visibilityState === "visible" && isIntersecting) {
+        video.play().catch(() => {});
+      }
+    };
+
+    const pauseVideo = () => {
+      if (!video.paused) {
+        video.pause();
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        isIntersecting = entry?.isIntersecting ?? false;
+        if (isIntersecting && playing) {
+          playVideo();
+        } else {
+          pauseVideo();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(video);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && playing && isIntersecting) {
+        playVideo();
+      } else {
+        pauseVideo();
+      }
+    };
+
+    video.addEventListener("canplay", playVideo);
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+
+    return () => {
+      observer.disconnect();
+      video.removeEventListener("canplay", playVideo);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    };
+  }, [src, playing]);
 
   const play = () => {
     videoRef.current?.play().catch(() => {});
@@ -42,7 +97,7 @@ function WorkCard({ src, title, tag }: (typeof projects)[number]) {
   };
 
   return (
-    <div className="group" onMouseEnter={play} onMouseLeave={pause}>
+    <div className="group">
       <button
         type="button"
         onClick={() => (playing ? pause() : play())}
@@ -53,10 +108,13 @@ function WorkCard({ src, title, tag }: (typeof projects)[number]) {
           ref={videoRef}
           className="aspect-video w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.03]"
           src={src}
+          autoPlay
           muted
           loop
           playsInline
-          preload="metadata"
+          preload="auto"
+          disablePictureInPicture
+          disableRemotePlayback
         />
         <span
           className={`absolute right-4 top-4 flex size-11 items-center justify-center rounded-full border-2 border-ink bg-cream/90 text-ink transition-all duration-300 ${

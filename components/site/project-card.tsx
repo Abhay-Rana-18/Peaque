@@ -1,20 +1,6 @@
-/**
- * Second section ("projects") — the composition that takes over the hero's
- * stage once the handover completes. Ported from the Figma "Main" frame at
- * node 226:85, a 1440 x 810 artboard.
- *
- * EVERY number below is that frame's own geometry expressed proportionally,
- * which is what makes it hold its shape at any width: positions and sizes are
- * percentages of the stage, and type, borders and radii are `cqw` against it
- * (1cqw = 14.4px at 1440, so 16px type is 1.1111cqw). Nothing is a raw pixel,
- * so there is no breakpoint at which the layout drifts out of proportion —
- * scaling the stage scales the whole composition rigidly.
- *
- * The stage is aspect-locked to 1440/810 and capped at the viewport height, so
- * it behaves like `object-fit: contain`: on a wide-and-short window it stops
- * growing at the height rather than overflowing, and the composition never
- * crops. That is the one thing a plain vw ladder cannot do.
- */
+"use client";
+
+import { useEffect, useRef } from "react";
 import { CardShapeDraw } from "./card-shape-draw";
 import { TorusKnotFlat } from "./torus-knot-flat";
 
@@ -51,7 +37,7 @@ const POS = {
   // top/left nudged up and left from the raw Figma box (was 19.2593/-6.611)
   // per feedback that the landing spot should sit further in that direction.
   // width/height untouched — size is correct, only the destination moved.
-  knotLeft: { left: -21, top: 20, width: 22.6978, height: 36.5398 },
+  knotLeft: { left: -18, top: 20, width: 22.6978, height: 36.5398 },
 } as const;
 
 type Box = { left: number; top: number; width: number; height: number };
@@ -73,21 +59,27 @@ export type ProjectArrow = {
   pathD: string;
   /** SVG path `d` attribute for the arrowhead. */
   headD: string;
+  /** Optional fill color for the arrowhead path (for filled contour shapes). */
+  headFill?: string;
+  /** Optional rotation in degrees for this arrow (e.g. -15, 25, 180). */
+  rotation?: number;
+  /** Optional CSS transform-origin for the rotation (defaults to "center"). */
+  transformOrigin?: string;
 };
 
 export type ProjectSpec = {
   /** Stable identity for React keys — not the array index, so reordering is safe. */
   id: string;
   video: string;
-  aiPill: Box & { text: string };
-  pdPill: Box & { text: string };
+  aiPill: Box & { text: string; bg?: string; textColor?: string; borderColor?: string };
+  pdPill: Box & { text: string; bg?: string; textColor?: string; borderColor?: string };
   bubble: Box;
   /**
    * Keep this box aspect-exact for the scribble artwork's 162x169 (see
    * CardShapeDraw), i.e. height ≈ width * 1.8546 in these units — width% of
    * 1440 against height% of 810. Break that ratio and the mark stretches.
    */
-  shape: Box;
+  shape: Box & { rotation?: number; transformOrigin?: string };
   /** Position box for the hand-written note text (left, top, width, height as % of stage). */
   notePos?: Box;
   /** Rotation angle (in degrees) for the hand-written note text. */
@@ -117,6 +109,28 @@ const DEFAULT_ARROW: ProjectArrow = {
   headD: "M15.5946 63.0234C13.3857 61.1206 5.96661 56.2005 2.3296 56.3496C0.77089 56.4135 10.408 50.5195 12.4756 45.6231",
 };
 
+const PROJECT2_ARROW: ProjectArrow = {
+  pos: { left: 59.0, top: 11.0, width: 15.1404, height: 20.0 },
+  viewBox: "0 0 118 122",
+  pathD: "M115.432 94.8007C109.999 26.5722 25.4982 23.572 7.49965 42.5718",
+  headD:
+    "M11.7555 25.0937C11.21 28.5 9.67 35.8 7.49965 42.5718C11.5 44.1 17.6 45.7 26.274 48.9424",
+  rotation: 0,
+};
+
+/**
+ * Project 3's arrow — Figma node 253:4550, the 03/04 frame. Box 863,504
+ * 84x66.24. Figma exported both paths as plain strokes here, so they go in as
+ * they came; the shape is the same mark project 1 uses, at its natural size.
+ */
+const PROJECT3_ARROW: ProjectArrow = {
+  pos: { left: 65.0, top: 64.5, width: 6.8332, height: 9.1777 },
+  viewBox: "0 0 84.483 66.3628",
+  pathD: "M83.9984 0.123056C75.9998 31.6231 36.4998 50.1231 2.99982 56.1231",
+  headD:
+    "M15.5947 63.0234C13.3859 61.1206 5.96676 56.2005 2.32975 56.3496C0.771039 56.4135 10.4081 50.5195 12.4758 45.6231",
+};
+
 const DEFAULT_NOTE_POS: Box = { left: 70.6, top: 22.6, width: 22.8707, height: 11.1111 };
 const DEFAULT_NOTE_ROTATION = 3.208;
 const DEFAULT_NOTE_TEXT =
@@ -140,30 +154,31 @@ export const PROJECTS: ProjectSpec[] = [
   {
     id: "p2",
     video: "/projects/first_card.mp4",
-    aiPill: { text: "AI-Startups", left: 56.8, top: 70.7, width: 7.6, height: 5.18 },
-    pdPill: { text: "Product Design", left: 36.8, top: 20.1, width: 11.6, height: 6.0 },
+    aiPill: { text: "B2B", left: 56.8, top: 70.7, width: 7.6, height: 5.18, bg:"#E56A44" },
+    pdPill: { text: "Webflow-Development", left: 35.7, top: 20.1, width: 15.6, height: 6.0 },
     bubble: { left: 58.3, top: 32.0, width: 5.5, height: 7.0 },
     shape: { left: 33.7, top: 60.5, width: 13.2, height: 24.48 },
-    notePos: DEFAULT_NOTE_POS,
-    noteRotation: -10,
+    // Figma node 253:2276 in the 02/04 frame: 900,299.77 334.15x109.61.
+    notePos: { left: 68.5, top: 27.6, width: 23.2047, height: 13.5324 },
+    noteRotation: -3.208,
     notePivot: "right",
-    noteAlign: "left",
+    noteAlign: "right",
     noteText: DEFAULT_NOTE_TEXT,
-    arrow: DEFAULT_ARROW,
+    arrow: PROJECT2_ARROW,
   },
   {
     id: "p3",
     video: "/projects/first_card.mp4",
-    aiPill: { text: "AI-Startups", left: 34.1, top: 33.9, width: 7.6, height: 5.18 },
-    pdPill: { text: "Product Design", left: 33.5, top: 70.6, width: 13.0, height: 6.0 },
-    bubble: { left: 59.0, top: 41.0, width: 5.5, height: 7.0 },
-    shape: { left: 52.63, top: 6.72, width: 14.17, height: 26.27 },
-    notePos: DEFAULT_NOTE_POS,
-    noteRotation: DEFAULT_NOTE_ROTATION,
-    notePivot: "left",
+    aiPill: { text: "AI-Startups", left: 58.7, top: 24.3, width: 7.6, height: 5.18, bg:"#8C0D98" },
+    pdPill: { text: "Product Animation", left: 49.3, top: 70.6, width: 13.0, height: 6.0 },
+    bubble: { left: 35.0, top: 41.0, width: 5.5, height: 7.0 },
+    shape: { left: 32.35, top: 7.6, width: 14.17, height: 26.27, rotation: 280 },
+    notePos: { left: 66.5, top: 54.8615, width: 23.2136, height: 13.6056 },
+    noteRotation: -3.208,
+    notePivot: "right",
     noteAlign: "right",
     noteText: DEFAULT_NOTE_TEXT,
-    arrow: DEFAULT_ARROW,
+    arrow: PROJECT3_ARROW,
   },
   {
     id: "p4",
@@ -222,6 +237,108 @@ function BackdropKnot({
         className="h-full w-full object-contain"
       />
     </div>
+  );
+}
+
+function ProjectVideo({ src }: { src: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const currentSrcRef = useRef<string>("");
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // Avoid reloading or interrupting playback if the video source hasn't changed across slides
+    if (currentSrcRef.current !== src) {
+      currentSrcRef.current = src;
+      video.src = src;
+      video.load();
+    }
+
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.playsInline = true;
+
+    let isIntersecting = true;
+
+    const playVideo = () => {
+      if (document.visibilityState === "visible" && isIntersecting) {
+        const playPromise = video.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {});
+        }
+      }
+    };
+
+    const pauseVideo = () => {
+      if (!video.paused) {
+        video.pause();
+      }
+    };
+
+    // IntersectionObserver to only keep decoder active when on screen
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        isIntersecting = entry?.isIntersecting ?? false;
+        if (isIntersecting) {
+          playVideo();
+        } else {
+          pauseVideo();
+        }
+      },
+      { threshold: 0.05 }
+    );
+
+    observer.observe(video);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && isIntersecting) {
+        playVideo();
+      } else {
+        pauseVideo();
+      }
+    };
+
+    video.addEventListener("loadeddata", playVideo, { once: true });
+    video.addEventListener("canplay", playVideo, { once: true });
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+
+    playVideo();
+
+    return () => {
+      observer.disconnect();
+      video.removeEventListener("loadeddata", playVideo);
+      video.removeEventListener("canplay", playVideo);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    };
+  }, [src]);
+
+  return (
+    <video
+      ref={videoRef}
+      className="h-full w-full object-cover scale-[1.05] pointer-events-none select-none"
+      autoPlay
+      muted
+      loop
+      playsInline
+      preload="auto"
+      controls={false}
+      tabIndex={-1}
+      aria-hidden="true"
+      disablePictureInPicture
+      disableRemotePlayback
+      onContextMenu={(e) => e.preventDefault()}
+      style={{
+        transform: "translate3d(0, 0, 0)",
+        backfaceVisibility: "hidden",
+        WebkitBackfaceVisibility: "hidden",
+        willChange: "transform",
+      }}
+    />
   );
 }
 
@@ -337,7 +454,10 @@ export function ProjectCard({
                 top: `${project.shape.top}%`,
                 width: `${project.shape.width}%`,
                 height: `${project.shape.height}%`,
-                transform: `translateZ(${DEPTH.shape}cqw)`,
+                transform: `translateZ(${DEPTH.shape}cqw)${
+                  project.shape.rotation ? ` rotate(${project.shape.rotation}deg)` : ""
+                }`,
+                transformOrigin: project.shape.transformOrigin ?? "center",
               }}
             >
               <CardShapeDraw />
@@ -348,7 +468,7 @@ export function ProjectCard({
                 object-cover rather than letterboxed. Sits at Z 0: it is the
                 plane the pills are measured in front of. */}
             <div
-              className="absolute overflow-hidden"
+              className="absolute overflow-hidden pointer-events-none select-none"
               style={{
                 left: `${POS.card.left}%`,
                 top: `${POS.card.top}%`,
@@ -358,22 +478,13 @@ export function ProjectCard({
                 border: "0.1609cqw solid #FFF",
                 boxShadow:
                   "0 0.2286cqw 0.4572cqw 0 rgba(0, 0, 0, 0.04), 0 1.3715cqw 2.2858cqw 0 rgba(0, 0, 0, 0.04)",
+                transform: "translate3d(0, 0, 0)",
+                backfaceVisibility: "hidden",
+                WebkitBackfaceVisibility: "hidden",
+                contain: "paint layout",
               }}
             >
-              {/* Keyed on the src, not the slide id: four identical srcs mean
-                  React never remounts this and the clip plays straight through
-                  a slide change, while four distinct srcs will remount cleanly
-                  and autoplay the new one. */}
-              <video
-                key={project.video}
-                className="h-full w-full object-cover scale-[1.07]"
-                src={project.video}
-                autoPlay
-                muted
-                loop
-                playsInline
-                preload="metadata"
-              />
+              <ProjectVideo src={project.video} />
             </div>
 
             {/* Tag 1 — overlaps the card's left edge */}
@@ -384,15 +495,18 @@ export function ProjectCard({
                 top: `${project.aiPill.top}%`,
                 width: `${project.aiPill.width}%`,
                 height: `${project.aiPill.height}%`,
-                background: "#176500",
-                border: "0.1389cqw solid #ffffff",
+                background: project.aiPill.bg ?? "#176500",
+                border: `0.1389cqw solid ${project.aiPill.borderColor ?? "#ffffff"}`,
                 borderRadius: "1.3889cqw",
                 transform: `translateZ(${DEPTH.tag}cqw)`,
               }}
             >
               <span
-                className="font-heading font-medium whitespace-nowrap text-white"
-                style={{ fontSize: "1.1111cqw" }}
+                className="font-heading font-medium whitespace-nowrap"
+                style={{
+                  fontSize: "1.1111cqw",
+                  color: project.aiPill.textColor ?? "#ffffff",
+                }}
               >
                 {project.aiPill.text}
               </span>
@@ -406,15 +520,18 @@ export function ProjectCard({
                 top: `${project.pdPill.top}%`,
                 width: `${project.pdPill.width}%`,
                 height: `${project.pdPill.height}%`,
-                background: "#ffffff",
-                border: "0.0804cqw solid #000000",
+                background: project.pdPill.bg ?? "#ffffff",
+                border: `0.0804cqw solid ${project.pdPill.borderColor ?? "#000000"}`,
                 borderRadius: "1.3674cqw",
                 transform: `translateZ(${DEPTH.tag}cqw)`,
               }}
             >
               <span
-                className="font-heading font-medium whitespace-nowrap text-black"
-                style={{ fontSize: "1.287cqw" }}
+                className="font-heading font-medium whitespace-nowrap"
+                style={{
+                  fontSize: "1.287cqw",
+                  color: project.pdPill.textColor ?? "#000000",
+                }}
               >
                 {project.pdPill.text}
               </span>
@@ -478,6 +595,7 @@ export function ProjectCard({
         {/* Curved arrow from the note down toward the card, animated via SVG path draw */}
         {(() => {
           const arw = project.arrow ?? DEFAULT_ARROW;
+          const rot = arw.rotation ?? 0;
           return (
             <svg
               data-note-arrow-svg
@@ -490,12 +608,17 @@ export function ProjectCard({
                 top: `${arw.pos.top}%`,
                 width: `${arw.pos.width}%`,
                 height: `${arw.pos.height}%`,
-                opacity: 0.7,
+                opacity: 0,
+                transform: rot ? `rotate(${rot}deg)` : undefined,
+                transformOrigin: arw.transformOrigin ?? "center",
               }}
             >
               <g opacity="0.7">
                 <path
                   data-note-arrow-path
+                  pathLength={1}
+                  strokeDasharray={1}
+                  strokeDashoffset={1}
                   d={arw.pathD}
                   stroke="black"
                   strokeWidth="1"
@@ -504,11 +627,14 @@ export function ProjectCard({
                 />
                 <path
                   data-note-arrow-head
+                  pathLength={1}
+                  strokeDasharray={1}
+                  strokeDashoffset={1}
                   d={arw.headD}
                   stroke="black"
                   strokeWidth="1"
                   strokeLinecap="round"
-                  fill="none"
+                  fill={arw.headFill ?? "none"}
                 />
               </g>
             </svg>

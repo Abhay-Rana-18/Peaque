@@ -44,6 +44,15 @@ export default function RootLayout({
       lang="en"
       className={`${archivo.variable} ${inter.variable} ${caveat.variable} ${kalam.variable} h-full antialiased`}
     >
+      <head>
+        <link
+          rel="preload"
+          href="/Loading.gif"
+          as="image"
+          type="image/gif"
+          fetchPriority="high"
+        />
+      </head>
       <body
         className="min-h-full flex flex-col overflow-x-clip"
         suppressHydrationWarning

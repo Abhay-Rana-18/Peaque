@@ -48,10 +48,30 @@ export function Loader() {
     let tl: gsap.core.Timeline | null = null;
     let cancelled = false;
 
-    // Spec §9 — gate on `document.fonts.ready`. The headline uses several faces
-    // and the cascade is centre-anchored, so a face landing mid-sequence would
-    // reflow word widths and jump the centring.
-    document.fonts.ready.then(() => {
+    // Preload & decode the GIF so it is guaranteed visible before starting timer
+    const preloadGif = new Promise<void>((resolve) => {
+      const img = new Image();
+      img.src = "/Loading.gif";
+      if (img.complete) {
+        if ("decode" in img) {
+          img.decode().then(() => resolve()).catch(() => resolve());
+        } else {
+          resolve();
+        }
+      } else {
+        img.onload = () => {
+          if ("decode" in img) {
+            img.decode().then(() => resolve()).catch(() => resolve());
+          } else {
+            resolve();
+          }
+        };
+        img.onerror = () => resolve(); // safety fallback
+      }
+    });
+
+    // Gate on both fonts readiness and GIF decoding
+    Promise.all([document.fonts.ready, preloadGif]).then(() => {
       if (cancelled) return;
 
       tl = gsap.timeline();
@@ -99,9 +119,13 @@ export function Loader() {
         className="flex items-center justify-center p-4"
       >
         {!logoGone && (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src="/Loading.gif"
             alt="Loading..."
+            fetchPriority="high"
+            loading="eager"
+            decoding="sync"
             className="h-auto w-[clamp(16rem,24vw,65rem)] max-h-[85vh] object-contain"
           />
         )}

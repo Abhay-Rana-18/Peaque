@@ -6,6 +6,62 @@ import { gsap } from "@/lib/gsap";
 /** Full-width showreel that scales up and squares off as it enters. */
 export function Reel() {
   const scope = useRef<HTMLElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let isIntersecting = false;
+    video.muted = true;
+    video.defaultMuted = true;
+
+    const playVideo = () => {
+      if (video.paused && document.visibilityState === "visible" && isIntersecting) {
+        video.play().catch(() => {});
+      }
+    };
+
+    const pauseVideo = () => {
+      if (!video.paused) {
+        video.pause();
+      }
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        isIntersecting = entry?.isIntersecting ?? false;
+        if (isIntersecting) {
+          playVideo();
+        } else {
+          pauseVideo();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    observer.observe(video);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && isIntersecting) {
+        playVideo();
+      } else {
+        pauseVideo();
+      }
+    };
+
+    video.addEventListener("canplay", playVideo);
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+
+    return () => {
+      observer.disconnect();
+      video.removeEventListener("canplay", playVideo);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    };
+  }, []);
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -58,6 +114,7 @@ export function Reel() {
         >
           <div className="aspect-video overflow-hidden">
             <video
+              ref={videoRef}
               data-reel-video
               className="h-full w-full scale-[1.18] object-cover"
               src="/resources/bg5.mp4"
@@ -65,7 +122,9 @@ export function Reel() {
               muted
               loop
               playsInline
-              preload="metadata"
+              preload="auto"
+              disablePictureInPicture
+              disableRemotePlayback
             />
           </div>
         </div>

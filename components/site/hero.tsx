@@ -167,10 +167,10 @@ const HANDOVER_VIDEO_DURATION = 0.35;
  * both halves independently is what makes a scrubbed sequence speed up and slow
  * down for no visible reason.
  */
-const SLIDE_HOLD_SVH = 55;
-const SLIDE_FLIP_SVH = 70;
-/** Rest after the last slide, so the final project is readable before release. */
-const SLIDE_TAIL_SVH = 45;
+const SLIDE_HOLD_SVH = 30;
+const SLIDE_FLIP_SVH = 35;
+/** Rest after the last slide (Project 4), giving it a full 4-scroll hold before moving to the next section. */
+const SLIDE_TAIL_SVH = 65;
 /** Every transition after the first slide — three of them for four projects. */
 const SLIDE_TRANSITIONS = PROJECT_COUNT - 1;
 const SLIDES_RUNWAY_SVH =
@@ -866,13 +866,12 @@ export function Hero() {
             pathEl: SVGPathElement | null | undefined,
           ) => {
             if (!pathEl) return 0;
-            const length = pathEl.getTotalLength();
             gsap.set(pathEl, {
-              strokeDasharray: length,
-              strokeDashoffset: length,
+              strokeDasharray: 1,
+              strokeDashoffset: 1,
               autoAlpha: 1,
             });
-            return length;
+            return 1;
           };
 
           const notePathLen = prepareNotePath(notePath);
@@ -916,6 +915,135 @@ export function Hero() {
           let timelineTotal = 0;
           /** Timeline time at which each flip is exactly edge-on — the swap beats. */
           const flipMidpoints: number[] = [];
+          /**
+           * Last index actually pushed into React. Scroll fires this callback on
+           * every frame, and calling the setter each time asks React to do work
+           * on the same thread the video needs for decoding and the scrub needs
+           * for its writes. Comparing here means React is only involved on the
+           * three frames of the whole runway where the slide really changes.
+           */
+          let lastPushedProject = 0;
+          let activeFlipTl: gsap.core.Timeline | null = null;
+
+          const playSlideFlip = (nextIdx: number, direction: number) => {
+            if (activeFlipTl) {
+              activeFlipTl.kill();
+              activeFlipTl = null;
+            }
+
+            if (!flipEl) {
+              setActiveProject(nextIdx);
+              return;
+            }
+
+            const flipTl = gsap.timeline({
+              onComplete: () => {
+                activeFlipTl = null;
+              },
+            });
+            activeFlipTl = flipTl;
+
+            // Retract/fade old note & arrow smoothly
+            if (noteSvg) flipTl.to(noteSvg, { autoAlpha: 0, duration: 0.2, ease: "power1.in" }, 0);
+            if (noteText) flipTl.to(noteText, { autoAlpha: 0, rotation: 0, duration: 0.22, ease: "power1.in" }, 0);
+
+            // Single continuous 180-degree rotation flow
+            const TOTAL_DUR = 1.2;
+            const anim = { p: 0 };
+            let swapped = false;
+
+            flipTl.to(
+              anim,
+              {
+                p: 1,
+                duration: TOTAL_DUR,
+                ease: "power2.inOut",
+                onUpdate: () => {
+                  if (anim.p < 0.5) {
+                    // First 90° (0° -> 90° or 0° -> -90°)
+                    const angle = direction * (anim.p * 2 * 90);
+                    gsap.set(flipEl, { rotateY: angle });
+                  } else {
+                    // Swap React state once at the edge-on midpoint
+                    if (!swapped) {
+                      swapped = true;
+                      setActiveProject(nextIdx);
+                    }
+                    // Second 90° (-90° -> 0° or 90° -> 0°) in the same uninterrupted flow
+                    const angle = -direction * (90 - (anim.p - 0.5) * 2 * 90);
+                    gsap.set(flipEl, { rotateY: angle });
+                  }
+                },
+              },
+              0,
+            );
+
+            // Midpoint timing for reveals
+            const MID_TIME = TOTAL_DUR * 0.5;
+            const IN_DUR = TOTAL_DUR * 0.5;
+
+            // Re-draw scribble shape on new project
+            if (shapePath) {
+              const shapeLen = shapePath.getTotalLength();
+              flipTl.fromTo(
+                shapePath,
+                { strokeDashoffset: shapeLen },
+                { strokeDashoffset: 0, duration: IN_DUR, ease: "power1.inOut" },
+                MID_TIME,
+              );
+            }
+
+            // Reveal note & arrow for new project
+            const nextProj = PROJECTS[nextIdx] || PROJECTS[0];
+            const nextPivot =
+              nextProj.notePivot === "right"
+                ? "100% 50%"
+                : nextProj.notePivot === "left"
+                ? "0% 50%"
+                : nextProj.notePivot ?? "0% 50%";
+            const nextRotation = nextProj.noteRotation ?? NOTE_FALL_TILT;
+
+            const REVEAL_START = MID_TIME + 0.1;
+            const STEM_DUR = 0.38;
+            const HEAD_DUR = 0.16;
+
+            if (noteText) {
+              flipTl.set(
+                noteText,
+                { transformOrigin: nextPivot, rotation: 0, autoAlpha: 0 },
+                MID_TIME,
+              );
+              flipTl.to(noteText, { autoAlpha: 0.8, duration: 0.22, ease: "none" }, MID_TIME);
+              flipTl.to(
+                noteText,
+                { rotation: nextRotation, duration: STEM_DUR, ease: "power1.inOut" },
+                REVEAL_START,
+              );
+            }
+
+            if (noteSvg) {
+              flipTl.set(noteSvg, { autoAlpha: 0 }, MID_TIME);
+              flipTl.to(noteSvg, { autoAlpha: 1, duration: 0.18, ease: "none" }, REVEAL_START);
+            }
+
+            if (notePath) {
+              flipTl.fromTo(
+                notePath,
+                { strokeDashoffset: 1 },
+                { strokeDashoffset: 0, duration: STEM_DUR, ease: "power1.inOut" },
+                REVEAL_START,
+              );
+            }
+
+            if (noteHead) {
+              flipTl.fromTo(
+                noteHead,
+                { strokeDashoffset: 1 },
+                { strokeDashoffset: 0, duration: HEAD_DUR, ease: "power1.out" },
+                REVEAL_START + STEM_DUR,
+              );
+            }
+          };
 
           const handover = gsap.timeline({
             scrollTrigger: {
@@ -938,9 +1066,11 @@ export function Hero() {
                 for (let i = 0; i < flipMidpoints.length; i++) {
                   if (t >= flipMidpoints[i]) next = i + 1;
                 }
-                // React bails out on an unchanged value, so this is a no-op on
-                // the vast majority of scroll events.
-                setActiveProject(next);
+                if (next !== lastPushedProject) {
+                  const dir = next > lastPushedProject ? 1 : -1;
+                  lastPushedProject = next;
+                  playSlideFlip(next, dir);
+                }
               },
             },
           });
@@ -970,7 +1100,7 @@ export function Hero() {
             // The reel stage itself just needs to stop being hidden — its own
             // children now carry the entrance motion, so this is a snap rather
             // than a tween (a fade here on top of theirs would double-dim them).
-            .set("[data-hero-reel]", { autoAlpha: 1 }, HANDOVER_REEL_START);
+            .set("[data-hero-reel]", { opacity: 1 }, HANDOVER_REEL_START);
 
           const flipEl =
             scope.current?.querySelector<HTMLElement>("[data-project-flip]");
@@ -1003,9 +1133,9 @@ export function Hero() {
             )
             .fromTo(
               "[data-project-video]",
-              { autoAlpha: 0 },
+              { opacity: 0 },
               {
-                autoAlpha: 1,
+                opacity: 1,
                 ease: "none",
                 duration: HANDOVER_VIDEO_DURATION * 0.34,
               },
@@ -1023,44 +1153,50 @@ export function Hero() {
           const targetTilt = PROJECTS[0]?.noteRotation ?? NOTE_FALL_TILT;
 
           if (noteText) {
-            // Step 1: Text fades in straight just before tilting starts (50% -> 75% card rise)
+            // Text fades in early as card rises
             handover.to(
               noteText,
               { autoAlpha: 0.8, duration: noteDur * 0.25, ease: "none" },
-              noteStart + noteDur * 0.5,
+              noteStart + noteDur * 0.15,
             );
-            // Step 2: Once card has risen up almost completely (~75%), start tilting text
+            // Tilt note text smoothly across the rise
             handover.to(
               noteText,
-              { rotation: targetTilt, duration: noteDur * 0.3, ease: "power1.out" },
-              noteStart + noteDur * 0.75,
+              { rotation: targetTilt, duration: noteDur * 0.6, ease: "power1.inOut" },
+              noteStart + noteDur * 0.25,
             );
           }
 
           if (noteSvg) {
-            // Step 3: Arrow SVG container fades in as tilt begins
+            // Arrow SVG fades in early as card rises
             handover.to(
               noteSvg,
               { autoAlpha: 1, duration: noteDur * 0.15, ease: "none" },
-              noteStart + noteDur * 0.75,
+              noteStart + noteDur * 0.2,
             );
           }
 
           if (notePath) {
-            // Arrow stem formation animation
-            handover.to(
+            // Arrow stem draws progressively while the card rises (matching shape draw)
+            const STEM_START = noteStart + noteDur * 0.2;
+            const STEM_DUR = noteDur * 0.65;
+            handover.fromTo(
               notePath,
-              { strokeDashoffset: 0, duration: noteDur * 0.35, ease: "power1.out" },
-              noteStart + noteDur * 0.75,
+              { strokeDashoffset: 1 },
+              { strokeDashoffset: 0, duration: STEM_DUR, ease: "none" },
+              STEM_START,
             );
           }
 
           if (noteHead) {
-            // Arrowhead formation animation
-            handover.to(
+            // Arrowhead draws as the card finishes rising and lands
+            const HEAD_START = noteStart + noteDur * 0.85;
+            const HEAD_DUR = noteDur * 0.15;
+            handover.fromTo(
               noteHead,
-              { strokeDashoffset: 0, duration: noteDur * 0.2, ease: "power1.out" },
-              noteStart + noteDur * 1.05,
+              { strokeDashoffset: 1 },
+              { strokeDashoffset: 0, duration: HEAD_DUR, ease: "power1.out" },
+              HEAD_START,
             );
           }
 
@@ -1096,13 +1232,21 @@ export function Hero() {
             const knotDelta = () => {
               const start = knotEl.getBoundingClientRect();
               const end = knotSlot.getBoundingClientRect();
+              const scale = Math.min(
+                end.width / start.width,
+                end.height / start.height,
+              );
+              const scaledKnotWidth = start.width * scale;
+
+              // On 4K / wide displays, ensure the scaled knot remains visible at the left edge
+              // (keeping at least 35% of its width on-screen rather than shifting off-screen).
+              const minLeft = -scaledKnotWidth * 0.65;
+              const destLeft = Math.max(end.left, minLeft);
+
               return {
-                x: end.left + end.width / 2 - (start.left + start.width/2),
+                x: destLeft + end.width / 2 - (start.left + start.width / 2),
                 y: end.top + end.height / 2 - (start.top + start.height / 2),
-                scale: Math.min(
-                  end.width / start.width,
-                  end.height / start.height,
-                ),
+                scale,
               };
             };
             handover.fromTo(
@@ -1212,207 +1356,16 @@ export function Hero() {
           // read BEFORE any flip is added, or it would include them.
           const handoverDur = handover.duration();
           const unitPerSvh = handoverDur / HANDOVER_RUNWAY_SVH;
-          const slideHold = SLIDE_HOLD_SVH * unitPerSvh;
-          const slideFlip = SLIDE_FLIP_SVH * unitPerSvh;
+          const slideSpan = (SLIDE_HOLD_SVH + SLIDE_FLIP_SVH) * unitPerSvh;
+
           for (let i = 0; i < SLIDE_TRANSITIONS; i++) {
-            const flipStart =
-              handoverDur + i * (slideHold + slideFlip) + slideHold;
-            const flipMid = flipStart + slideFlip / 2;
-            // Recorded even when the element is missing, so the counter and the
-            // slide content still advance if the flip itself cannot run.
+            const flipMid = handoverDur + i * slideSpan + slideSpan * 0.5;
+            // Recorded so onUpdate knows the exact scroll threshold to trigger each flip
             flipMidpoints.push(flipMid);
-
-            if (!flipEl) continue;
-
-            // `immediateRender: false` on BOTH halves is load-bearing. fromTo
-            // defaults to rendering its `from` state the moment it is created,
-            // which for the second half would slam the card to -90deg at build
-            // time and leave the whole section edge-on before a single pixel is
-            // scrolled.
-            handover.fromTo(
-              flipEl,
-              { rotateY: 0 },
-              {
-                rotateY: 90,
-                ease: "none",
-                duration: slideFlip / 2,
-                immediateRender: false,
-              },
-              flipStart,
-            );
-            handover.fromTo(
-              flipEl,
-              { rotateY: -90 },
-              {
-                rotateY: 0,
-                ease: "none",
-                duration: slideFlip / 2,
-                immediateRender: false,
-              },
-              flipMid,
-            );
-
-            // Re-draw the scribble shape on each slide change: reset to fully
-            // hidden at the flip midpoint (content has just swapped) and draw
-            // during the second half of the flip so the new project's mark
-            // reveals alongside the card turning back to face the viewer.
-            if (shapePath) {
-              const shapeLen = shapePath.getTotalLength();
-              handover.fromTo(
-                shapePath,
-                { strokeDashoffset: shapeLen },
-                {
-                  strokeDashoffset: 0,
-                  ease: "power1.inOut",
-                  duration: slideFlip / 2,
-                  immediateRender: false,
-                },
-                flipMid,
-              );
-            }
-
-            // Re-animate the hand-written note text & its arrow on each slide change:
-            // 1) Fast back-animation during flip-out (flipStart -> flipMid):
-            //    Arrowhead removes first, stem retracts, note text un-tilts & fades out.
-            if (noteHead && noteHeadLen) {
-              handover.to(
-                noteHead,
-                {
-                  strokeDashoffset: noteHeadLen,
-                  duration: slideFlip * 0.08,
-                  ease: "power1.in",
-                },
-                flipStart,
-              );
-            }
-
-            if (notePath && notePathLen) {
-              handover.to(
-                notePath,
-                {
-                  strokeDashoffset: notePathLen,
-                  duration: slideFlip * 0.16,
-                  ease: "power1.in",
-                },
-                flipStart + slideFlip * 0.05,
-              );
-            }
-
-            if (noteText) {
-              handover.to(
-                noteText,
-                {
-                  autoAlpha: 0,
-                  rotation: 0,
-                  duration: slideFlip * 0.2,
-                  ease: "power1.in",
-                },
-                flipStart,
-              );
-            }
-
-            if (noteSvg) {
-              handover.to(
-                noteSvg,
-                {
-                  autoAlpha: 0,
-                  duration: slideFlip * 0.15,
-                  ease: "power1.in",
-                },
-                flipStart,
-              );
-            }
-
-            // 2) Reveal sequence for new project (from flipMid as card turns in):
-            //    a. Text fades in straight (rotation: 0) with project's notePivot transformOrigin
-            //    b. Text tilts to project's noteRotation
-            //    c. Arrow stem & head draw
-            const nextProj = PROJECTS[i + 1] || PROJECTS[0];
-            const nextPivot =
-              nextProj.notePivot === "right"
-                ? "100% 50%"
-                : nextProj.notePivot === "left"
-                ? "0% 50%"
-                : nextProj.notePivot ?? "0% 50%";
-            const nextRotation = nextProj.noteRotation ?? NOTE_FALL_TILT;
-
-            if (noteText) {
-              // Set transformOrigin and reset straight rotation at flipMid
-              handover.set(
-                noteText,
-                {
-                  transformOrigin: nextPivot,
-                  rotation: 0,
-                  autoAlpha: 0,
-                },
-                flipMid,
-              );
-
-              // Step A: Fade in straight (rotation: 0) while card turns in
-              handover.to(
-                noteText,
-                {
-                  autoAlpha: 0.8,
-                  rotation: 0,
-                  ease: "none",
-                  duration: slideFlip * 0.18,
-                },
-                flipMid,
-              );
-
-              // Step B: Tilt text to new project angle as card finishes turning in
-              handover.to(
-                noteText,
-                {
-                  rotation: nextRotation,
-                  ease: "power1.out",
-                  duration: slideFlip * 0.17,
-                },
-                flipMid + slideFlip * 0.18,
-              );
-            }
-
-            if (noteSvg) {
-              handover.set(noteSvg, { autoAlpha: 0 }, flipMid);
-              handover.to(
-                noteSvg,
-                {
-                  autoAlpha: 1,
-                  duration: slideFlip * 0.08,
-                },
-                flipMid + slideFlip * 0.2,
-              );
-            }
-
-            if (notePath && notePathLen) {
-              handover.to(
-                notePath,
-                {
-                  strokeDashoffset: 0,
-                  ease: "power1.out",
-                  duration: slideFlip * 0.18,
-                },
-                flipMid + slideFlip * 0.2,
-              );
-            }
-
-            if (noteHead && noteHeadLen) {
-              handover.to(
-                noteHead,
-                {
-                  strokeDashoffset: 0,
-                  ease: "power1.out",
-                  duration: slideFlip * 0.1,
-                },
-                flipMid + slideFlip * 0.38,
-              );
-            }
+            handover.to({}, { duration: slideSpan });
           }
 
-          // Tail: nothing animates, the last slide simply holds. Added as an
-          // empty span so the runway's final stretch maps to real timeline
-          // time — without it the scrub would compress the whole sequence into
-          // the earlier part of the scroll and the last project would flash past.
+          // Tail: nothing animates, the last slide (Project 4) simply holds for its full duration
           handover.to({}, { duration: SLIDE_TAIL_SVH * unitPerSvh });
 
           // Now that every tween exists, publish the length onUpdate converts
